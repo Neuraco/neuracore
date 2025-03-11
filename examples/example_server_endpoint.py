@@ -8,7 +8,7 @@ from common.sim_env import BOX_POSE, make_sim_env
 import neuracore as nc
 from neuracore.exceptions import EndpointError
 
-ENDPOINT_NAME = "MyExampleEndpoint"
+ENDPOINT_NAME = "test"
 
 
 def main():

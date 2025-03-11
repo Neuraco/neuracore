@@ -12,9 +12,9 @@ THIS_DIR = Path(__file__).parent
 
 def main():
     nc.login()
-    policy = nc.connect_local_endpoint(THIS_DIR / "common" / "assets" / "model.mar")
+    # policy = nc.connect_local_endpoint(THIS_DIR / "common" / "assets" / "model.mar")
     # If you have a train run name, you can use it to connect to a local. E.g.:
-    # policy = nc.connect_local_endpoint(train_run_name="MyTrainRun")
+    policy = nc.connect_local_endpoint(train_run_name="test")
     onscreen_render = True
     render_cam_name = "angle"
 

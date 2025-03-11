@@ -189,9 +189,10 @@ def connect_local_endpoint(
         response = requests.get(
             f"{API_URL}/training/jobs/{job_id}/model",
             headers=auth.get_headers(),
-            timeout=120,
+            timeout=200,
             stream=True,
         )
+        print("Downloaded file!")
         response.raise_for_status()
         tempdir = tempfile.mkdtemp()
         path_to_model = Path(tempdir) / f"{train_run_name}.mar"
