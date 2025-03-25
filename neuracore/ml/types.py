@@ -15,6 +15,7 @@ class DatasetDescription:
         state_mean: torch.FloatTensor,
         state_std: torch.FloatTensor,
         action_prediction_horizon: int = 1,
+        obs_history_length: int = 1,
     ):
         self.max_num_cameras = max_num_cameras
         self.max_state_size = max_state_size
@@ -24,6 +25,7 @@ class DatasetDescription:
         self.state_mean = state_mean
         self.state_std = state_std
         self.action_prediction_horizon = action_prediction_horizon
+        self.obs_history_length = obs_history_length
 
     def to(self, device: torch.device):
         """Move all tensors to the specified device."""
@@ -36,6 +38,7 @@ class DatasetDescription:
             state_mean=self.state_mean.to(device),
             state_std=self.state_std.to(device),
             action_prediction_horizon=self.action_prediction_horizon,
+            obs_history_length=self.obs_history_length,
         )
 
 

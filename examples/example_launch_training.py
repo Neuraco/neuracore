@@ -40,7 +40,7 @@ def create_parser():
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default="Example Dataset",
+        default="Austin Buds",
         help="Name of the dataset to use for training.",
     )
     parser.add_argument(
@@ -60,6 +60,12 @@ def create_parser():
         type=int,
         default=50,
         help="Prediction horizon.",
+    )
+    parser.add_argument(
+        "--obs_history_length",
+        type=int,
+        default=2,
+        help="Observation horizon.",
     )
     return parser
 
@@ -81,6 +87,7 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "epochs": args.epochs,
         "action_sequence_length": args.action_sequence_length,
+        "obs_history_length": args.obs_history_length,
     }
 
     job_data = nc.start_training_run(

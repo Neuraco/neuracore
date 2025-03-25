@@ -43,12 +43,14 @@ class CNNMLP(NeuracoreModel):
         ])
 
         self.state_embed = nn.Linear(
-            self.dataset_description.max_state_size, hidden_dim
+            self.dataset_description.max_state_size,
+            hidden_dim * self.dataset_description.obs_history_length,
         )
 
         mlp_input_dim = (
             self.dataset_description.max_num_cameras * cnn_output_dim + hidden_dim
         )
+        mlp_input_dim *= self.dataset_description.obs_history_length
 
         # Predict entire sequence at once
         self.action_output_size = (
@@ -66,6 +68,8 @@ class CNNMLP(NeuracoreModel):
             T.Resize((224, 224)),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         )
+
+        self.obs_history_length = self.dataset_description.obs_history_length
 
         self.action_prediction_horizon = (
             self.dataset_description.action_prediction_horizon
@@ -113,9 +117,7 @@ class CNNMLP(NeuracoreModel):
     def _preprocess_camera_images(
         self, camera_images: torch.FloatTensor
     ) -> torch.FloatTensor:
-        for cam_id in range(self.dataset_description.max_num_cameras):
-            camera_images[:, cam_id] = self.transform(camera_images[:, cam_id])
-        return camera_images
+        return self.transform(camera_images)
 
     def _inference_postprocess(
         self, output: BatchedInferenceOutputs
@@ -133,9 +135,12 @@ class CNNMLP(NeuracoreModel):
         # Process images from each camera
         image_features = []
         for cam_id, encoder in enumerate(self.image_encoders):
-            features = encoder(batch.camera_images[:, cam_id])
-            features *= batch.camera_images_mask[:, cam_id : cam_id + 1]
-            image_features.append(features)
+            camera_imgages = batch.camera_images[:, cam_id].view(
+                -1, *batch.camera_images.shape[2:]
+            )
+            camera_features = encoder(camera_imgages).view(batch_size, -1)
+            camera_features *= batch.camera_images_mask[:, cam_id : cam_id + 1]
+            image_features.append(camera_features)
 
         # Combine image features
         if image_features:
@@ -145,7 +150,8 @@ class CNNMLP(NeuracoreModel):
                 batch_size, self.cnn_output_dim, device=self.device, dtype=torch.float32
             )
 
-        state_features = self.state_embed(batch.states)
+        flat_states = batch.states.view(-1, self.dataset_description.max_state_size)
+        state_features = self.state_embed(flat_states).view(batch_size, -1)
 
         # Combine all features
         combined_features = torch.cat([state_features, combined_image_features], dim=-1)
