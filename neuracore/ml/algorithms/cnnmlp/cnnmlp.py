@@ -44,7 +44,7 @@ class CNNMLP(NeuracoreModel):
 
         self.state_embed = nn.Linear(
             self.dataset_description.max_state_size,
-            hidden_dim * self.dataset_description.obs_history_length,
+            hidden_dim,
         )
 
         mlp_input_dim = (
@@ -136,7 +136,7 @@ class CNNMLP(NeuracoreModel):
         image_features = []
         for cam_id, encoder in enumerate(self.image_encoders):
             camera_imgages = batch.camera_images[:, cam_id].view(
-                -1, *batch.camera_images.shape[2:]
+                -1, *batch.camera_images.shape[3:]
             )
             camera_features = encoder(camera_imgages).view(batch_size, -1)
             camera_features *= batch.camera_images_mask[:, cam_id : cam_id + 1]
