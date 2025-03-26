@@ -16,6 +16,7 @@ CAMS = 1
 STATE_DIM = 32
 ACTION_DIM = 7
 PRED_HORIZON = 10
+OBS_HIST = 4
 
 
 @pytest.fixture
@@ -29,6 +30,7 @@ def dataset_description() -> DatasetDescription:
         state_mean=torch.ones(STATE_DIM, dtype=torch.float32),
         state_std=torch.ones(STATE_DIM, dtype=torch.float32),
         action_prediction_horizon=PRED_HORIZON,
+        obs_history_length=OBS_HIST,
     )
 
 
@@ -51,9 +53,9 @@ def model_config() -> dict:
 @pytest.fixture
 def sample_batch() -> BatchedTrainingSamples:
     return BatchedTrainingSamples(
-        states=torch.randn(BS, STATE_DIM, dtype=torch.float32),
+        states=torch.randn(BS, OBS_HIST, STATE_DIM, dtype=torch.float32),
         states_mask=torch.ones(BS, STATE_DIM, dtype=torch.float32),
-        camera_images=torch.randn(BS, CAMS, 3, 224, 224, dtype=torch.float32),
+        camera_images=torch.randn(BS, CAMS, OBS_HIST, 3, 224, 224, dtype=torch.float32),
         camera_images_mask=torch.ones(BS, CAMS, dtype=torch.float32),
         actions=torch.randn(BS, PRED_HORIZON, ACTION_DIM, dtype=torch.float32),
         actions_mask=torch.ones(BS, ACTION_DIM, dtype=torch.float32),
@@ -64,9 +66,9 @@ def sample_batch() -> BatchedTrainingSamples:
 @pytest.fixture
 def sample_inference_batch() -> BatchedTrainingSamples:
     return BatchedInferenceSamples(
-        states=torch.randn(BS, STATE_DIM, dtype=torch.float32),
+        states=torch.randn(BS, OBS_HIST, STATE_DIM, dtype=torch.float32),
         states_mask=torch.ones(BS, STATE_DIM, dtype=torch.float32),
-        camera_images=torch.randn(BS, CAMS, 3, 224, 224, dtype=torch.float32),
+        camera_images=torch.randn(BS, CAMS, OBS_HIST, 3, 224, 224, dtype=torch.float32),
         camera_images_mask=torch.ones(BS, CAMS, dtype=torch.float32),
     )
 

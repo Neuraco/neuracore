@@ -138,9 +138,7 @@ class ACT(NeuracoreModel):
     def _preprocess_camera_images(
         self, camera_images: torch.FloatTensor
     ) -> torch.FloatTensor:
-        for cam_id in range(self.dataset_description.max_num_cameras):
-            camera_images[:, cam_id] = self.transform(camera_images[:, cam_id])
-        return camera_images
+        return self.transform(camera_images)
 
     def _inference_postprocess(
         self, output: BatchedInferenceOutputs
@@ -171,7 +169,7 @@ class ACT(NeuracoreModel):
         batch_size = state.shape[0]
 
         # Project joint positions and actions
-        state_embed = self.state_embed(state * state_mask)  # [B, H]
+        state_embed = self.state_embed(state[:, 0] * state_mask)  # [B, H]
         action_embed = self.action_embed(
             actions * actions_mask.unsqueeze(1)
         )  # [B, T, H]
@@ -222,7 +220,7 @@ class ACT(NeuracoreModel):
         image_pos = []
         for cam_id, encoder in enumerate(self.image_encoders):
             features, pos = encoder(
-                camera_images[:, cam_id]
+                camera_images[:, cam_id, 0]
             )  # Vision backbone provides features and pos
             features *= camera_images_mask[:, cam_id].view(batch_size, 1, 1, 1)
             image_features.append(features)
@@ -237,7 +235,7 @@ class ACT(NeuracoreModel):
         pos = combined_pos.flatten(2).permute(2, 0, 1)
 
         # Process joint positions and latent
-        state_features = self.state_embed(states * states_mask)  # [B, H]
+        state_features = self.state_embed(states[:, 0] * states_mask)  # [B, H]
 
         # Stack latent and proprio features
         additional_features = torch.stack([latent, state_features], dim=0)  # [2, B, H]

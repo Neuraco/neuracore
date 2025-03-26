@@ -135,8 +135,11 @@ class CNNMLP(NeuracoreModel):
         # Process images from each camera
         image_features = []
         for cam_id, encoder in enumerate(self.image_encoders):
-            camera_imgages = batch.camera_images[:, cam_id].view(
-                -1, *batch.camera_images.shape[3:]
+            camera_imgages = batch.camera_images[:, cam_id].reshape(
+                -1,
+                batch.camera_images.shape[3],
+                batch.camera_images.shape[4],
+                batch.camera_images.shape[5],
             )
             camera_features = encoder(camera_imgages).view(batch_size, -1)
             camera_features *= batch.camera_images_mask[:, cam_id : cam_id + 1]

@@ -1,10 +1,13 @@
 import base64
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
 import time
+import warnings
+from collections import deque
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -23,11 +26,29 @@ logger = logging.getLogger(__name__)
 class EndpointPolicy:
     """Interface to a deployed model endpoint."""
 
-    def __init__(self, predict_url: str, headers: dict[str, str] = None):
+    def __init__(
+        self,
+        predict_url: str,
+        headers: dict[str, str] = None,
+        obs_history_length: int = 1,
+        freq: int = 50,
+    ):
         self._predict_url = predict_url
         self._headers = headers or {}
         self._process = None
         self._is_local = "localhost" in predict_url
+
+        self.obs_history_length = obs_history_length
+        self.freq = freq
+        self.joint_position_hist = deque(maxlen=self.obs_history_length)
+        self.image_hist = dict()
+        self.last_call = None
+
+    def reset_history(self) -> None:
+        """Reset the history of the endpoint."""
+        self.joint_position_hist = deque(maxlen=self.obs_history_length)
+        self.image_hist = dict()
+        self.last_call = None
 
     def predict(
         self, joint_positions: list[float], images: dict[str, np.ndarray]
@@ -45,11 +66,38 @@ class EndpointPolicy:
         Raises:
             EndpointError: If prediction fails
         """
+        # Calculate elapsed time since last call
+        now = time.time()
+        if self.last_call is None:
+            elapsed = None
+        else:
+            elapsed = now - self.last_call
+        self.last_call = now
+
+        update_hist = True
+        if (
+            elapsed is not None
+            and self.obs_history_length > 1
+            and (1 / elapsed - self.freq) > self.freq / 10
+        ):
+            update_hist = False
+            warnings.warn(
+                "Warning: Endpoint called too frequently. Skipping history update."
+            )
+        elif (
+            elapsed is not None
+            and self.obs_history_length > 1
+            and (1 / elapsed - self.freq) < self.freq / 10
+        ):
+            warnings.warn("Warning: Endpoint called too infrequently.")
+
         # Encode images as base64
-        encoded_images = {}
         for camera_id, image in images.items():
             if not isinstance(image, np.ndarray):
                 raise ValueError(f"Image for camera {camera_id} must be a numpy array")
+
+            if camera_id not in self.image_hist:
+                self.image_hist[camera_id] = deque(maxlen=self.obs_history_length)
 
             # Convert to uint8 if needed
             if image.dtype != np.uint8:
@@ -73,12 +121,35 @@ class EndpointPolicy:
 
             buffer = BytesIO()
             pil_image.save(buffer, format="PNG")
-            encoded_images[camera_id] = base64.b64encode(buffer.getvalue()).decode(
-                "utf-8"
-            )
 
+            if update_hist:
+                self.image_hist[camera_id].append(
+                    base64.b64encode(buffer.getvalue()).decode("utf-8")
+                )
+            else:
+                self.image_hist[camera_id][0] = base64.b64encode(
+                    buffer.getvalue()
+                ).decode("utf-8")
+
+            while len(self.image_hist[camera_id]) < self.obs_history_length:
+                self.image_hist[camera_id].append(self.image_hist[camera_id][0])
+
+        if update_hist:
+            self.joint_position_hist.append(joint_positions)
+        else:
+            self.joint_position_hist[0] = joint_positions
+
+        while len(self.joint_position_hist) < self.obs_history_length:
+            self.joint_position_hist.append(joint_positions)
+
+        encoded_images = {
+            camera_id: list(self.image_hist[camera_id]) for camera_id in self.image_hist
+        }
         # Prepare request data
-        request_data = {"joint_positions": joint_positions, "images": encoded_images}
+        request_data = {
+            "joint_positions": list(self.joint_position_hist),
+            "images": encoded_images,
+        }
 
         if not self._is_local:
             payload_size = sys.getsizeof(json.dumps(request_data)) / (
@@ -150,9 +221,20 @@ def connect_endpoint(name: str) -> EndpointPolicy:
                 f"Endpoint {name} is not active (status: {endpoint['status']})"
             )
 
+        # Get parameters used to train the model.
+        job_id = endpoint["training_job_id"]
+        response = requests.get(
+            f"{API_URL}/training/jobs/{job_id}/dataset_description",
+            headers=auth.get_headers(),
+        )
+        response.raise_for_status()
+        dataset_description = response.json()
+
         return EndpointPolicy(
             f"{API_URL}/models/endpoints/{endpoint['id']}/predict",
             auth.get_headers(),
+            obs_history_length=dataset_description["obs_history_length"],
+            freq=dataset_description["frequency"],
         )
 
     except requests.exceptions.RequestException as e:
@@ -199,6 +281,18 @@ def connect_local_endpoint(
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+
+        # Get parameters used to train the model.
+        response = requests.get(
+            f"{API_URL}/training/jobs/{job_id}/dataset_description",
+            headers=auth.get_headers(),
+        )
+        response.raise_for_status()
+        dataset_description = response.json()
+        dataset_description_path = Path(tempdir) / "dataset_description.json"
+        with open(dataset_description_path, "w") as f:
+            json.dump(dataset_description, f)
+
     try:
         process = _setup_torchserve(path_to_model)
         health_check = requests.get("http://localhost:8080/ping")
@@ -206,6 +300,22 @@ def connect_local_endpoint(
             logging.info("TorchServe is running...")
         else:
             raise EndpointError("TorchServe is not running")
+
+        dataset_description_path = path_to_model.split("/")
+        dataset_description_path[-1] = "dataset_description.json"
+        dataset_description_path = "/".join(dataset_description_path)
+        if not os.path.exists(dataset_description_path):
+            raise FileNotFoundError(
+                f"Dataset description file not found: {dataset_description_path}"
+            )
+        with open(dataset_description_path) as f:
+            dataset_description = json.load(f)
+
+        endpoint = EndpointPolicy(
+            "http://localhost:8080/predictions/robot_model",
+            obs_history_length=dataset_description["obs_history_length"],
+            freq=dataset_description["frequency"],
+        )
 
         endpoint = EndpointPolicy("http://localhost:8080/predictions/robot_model")
         endpoint._process = process
