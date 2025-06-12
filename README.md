@@ -64,6 +64,7 @@ nc.log_rgb("top_camera", image_array)
 
 ## Documentation
 
+ - [Examples](./examples/README.md)
  - [Creating Custom Algorithms](./docs/creating_custom_algorithms.md)
  - [Limitations](./docs/limitations.md)
 

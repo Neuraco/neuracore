@@ -75,11 +75,10 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            (
-                "neuracore-generate-api-key = "
-                "neuracore.core.generate_api_key:generate_api_key"
-            ),
-            ("neuracore-validate = " "neuracore.tools.validate:main"),
+            "nc-login = neuracore.core.generate_api_key:generate_api_key",
+            # "nc-validate = neuracore.ml.cli.validate:main",
+            # "nc-train = neuracore.ml.cli.train:main"
+            # "nc-upload-algorithm = neuracore.ml.cli.upload_algorithm:main",
         ]
     },
     keywords="robotics machine-learning ai client-library",

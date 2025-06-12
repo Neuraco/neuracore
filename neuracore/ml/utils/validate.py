@@ -29,9 +29,9 @@ from ...core.nc_types import (
     ModelInitDescription,
     SyncPoint,
 )
+from ..datasets.pytorch_dummy_dataset import PytorchDummyDataset
 from ..ml_types import BatchedTrainingOutputs, BatchedTrainingSamples, MaskableData
 from .algorithm_loader import AlgorithmLoader
-from .dummy_dataset import DummyDataset
 from .mar import create_mar
 
 
@@ -182,7 +182,7 @@ def run_validation(
             model_class.get_supported_output_data_types()
         )
 
-        dataset = DummyDataset(
+        dataset = PytorchDummyDataset(
             num_samples=5,
             input_data_types=supported_input_data_types,
             output_data_types=supported_output_data_types,

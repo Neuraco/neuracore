@@ -10,7 +10,7 @@ import pytest
 
 import neuracore as nc
 from neuracore.core.const import API_URL
-from neuracore.core.dataset import Dataset, EpisodeIterator
+from neuracore.core.data.dataset import Dataset, EpisodeIterator
 from neuracore.core.exceptions import DatasetError
 from neuracore.core.nc_types import CameraData, JointData, SyncedData, SyncPoint
 from neuracore.core.utils.video_url_streamer import VideoStreamer

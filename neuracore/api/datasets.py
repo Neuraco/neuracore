@@ -6,7 +6,7 @@ for robot demonstrations.
 
 from typing import Optional
 
-from ..core.dataset import Dataset
+from ..core.data.dataset import Dataset
 from .globals import GlobalSingleton
 
 

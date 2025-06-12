@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 TrainingSample = BatchedTrainingSamples
 
 
-class NeuracoreDataset(Dataset, ABC):
+class PytorchNeuracoreDataset(Dataset, ABC):
     """Abstract base class for Neuracore multi-modal robot datasets.
 
     This class provides a standardized interface for datasets containing robot

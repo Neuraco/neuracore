@@ -13,14 +13,14 @@ import torch
 
 from neuracore.core.nc_types import DataItemStats, DatasetDescription, DataType
 from neuracore.ml import BatchedTrainingSamples, MaskableData
-from neuracore.ml.utils.neuracore_dataset import NeuracoreDataset
+from neuracore.ml.datasets.pytorch_neuracore_dataset import PytorchNeuracoreDataset
 
 logger = logging.getLogger(__name__)
 
 TrainingSample = BatchedTrainingSamples
 
 
-class DummyDataset(NeuracoreDataset):
+class PytorchDummyDataset(PytorchNeuracoreDataset):
     """Synthetic dataset for algorithm validation and testing.
 
     This dataset generates random data with the same structure and dimensions

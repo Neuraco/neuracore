@@ -12,7 +12,7 @@ import requests
 
 from ..core.auth import get_auth
 from ..core.const import API_URL
-from ..core.dataset import Dataset
+from ..core.data.dataset import Dataset
 from ..core.nc_types import DataType
 
 
