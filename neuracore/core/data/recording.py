@@ -54,3 +54,9 @@ class Recording:
             frequency=frequency,
             data_types=data_types or [],
         )
+
+    def __iter__(self) -> None:
+        raise RuntimeError(
+            "Only synchronized recordings can be iterated over. "
+            "Use the synchronize method to create a synchronized recording."
+        )

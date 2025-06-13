@@ -6,9 +6,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-CHECK_MEMORY_INTERVAL = 10
-
-
 class CacheManager:
     """Manages the cache directory to prevent disk space exhaustion."""
 

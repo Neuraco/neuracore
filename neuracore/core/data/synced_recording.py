@@ -154,8 +154,7 @@ class SynchronizedRecording:
         camera_type: str,
         cam_metadata: dict[str, CameraData],
         t0_cam_metadata: dict[str, CameraData],
-        number_of_frames_to_get: int = 1,
-    ) -> list[list[Image.Image]]:
+    ) -> list[Image.Image]:
         """Get video frames for multiple cameras with proper timing synchronization."""
         camera_ids = list(cam_metadata.keys())
 
@@ -173,7 +172,7 @@ class SynchronizedRecording:
                     )  # Estimate 100MB per video
                     self._download_video(camera_type, cam_id, video_cache_path)
 
-        image_frames = []
+        image_frame_for_each_camera = []
         for cam_id, cam_data in cam_metadata.items():
             video_file = video_cache_path / f"{cam_id}.mp4"
             container = av.open(str(video_file))
@@ -188,34 +187,29 @@ class SynchronizedRecording:
             container.seek(target_pts, stream=video_stream)
 
             # Find the closest frame to our target
-            frames = []
+            cam_frame: Image.Image = None
             for frame in container.decode(video=0):
                 frame_pts = frame.pts
                 diff = frame_pts - target_pts
 
                 if diff >= 0:
-                    frames.append(Image.fromarray(frame.to_rgb().to_ndarray()))
-                    if len(frames) >= number_of_frames_to_get:
-                        break
+                    cam_frame = Image.fromarray(frame.to_rgb().to_ndarray())
+                    break
 
-            # Fill in missing frames with the last available frame
-            for _ in range(number_of_frames_to_get - len(frames)):
-                if frames:
-                    frames.append(frames[-1])
-                else:
-                    # Create a black placeholder frame if no frames found
-                    frames.append(Image.new("RGB", (640, 480), color=(0, 0, 0)))
+            if not cam_frame:
+                raise ValueError(
+                    f"No frame found for {camera_type}/{cam_id} at timestamp {cam_data.timestamp}"
+                )
 
-            image_frames.append(frames)
+            image_frame_for_each_camera.append(cam_frame)
             container.close()
 
-        return image_frames
+        return image_frame_for_each_camera
 
     def _populate_video_frames(
         self,
         camera_data: dict[str, CameraData],
         transform_fn=None,
-        number_of_frames_to_get: int = 1,
     ):
         """Populate video frames for camera data using the original timing-based approach."""
         camera_type = "rgbs" if transform_fn is None else "depths"
@@ -229,14 +223,12 @@ class SynchronizedRecording:
         )
 
         # Get frames using the original timing-based method
-        frame_lists = self._get_video_frames(
-            camera_type, camera_data, t0_cam_metadata, number_of_frames_to_get
-        )
+        frame_lists = self._get_video_frames(camera_type, camera_data, t0_cam_metadata)
 
         # Apply transforms and assign frames to camera data
         for i, (camera_id, cam_data) in enumerate(camera_data.items()):
             if i < len(frame_lists) and frame_lists[i]:
-                frame = frame_lists[i][0]  # Get first frame
+                frame = frame_lists[i]
                 if transform_fn:
                     frame = transform_fn(frame)
                 cam_data.frame = frame
