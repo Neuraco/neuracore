@@ -1,3 +1,5 @@
+"""Auto-tuner for finding the optimal batch size for model training."""
+
 import gc
 import logging
 import time
@@ -29,14 +31,14 @@ class BatchSizeAutotuner:
         """Initialize the batch size auto-tuner.
 
         Args:
-            model: Model to use for testing
             dataset: Dataset to use for testing
+            model: Model to use for testing
             model_kwargs: Arguments to pass to model constructor
             dataloader_kwargs: Additional arguments for the DataLoader
             min_batch_size: Minimum batch size to try
             max_batch_size: Maximum batch size to try
             num_iterations: Number of iterations to run for each batch size
-            gpu_id: GPU device to use (default: 0)
+            gpu_id: GPU device to use
         """
         self.dataset = dataset
         self.model_kwargs = model_kwargs
@@ -68,6 +70,7 @@ class BatchSizeAutotuner:
 
     def find_optimal_batch_size(self) -> int:
         """Find the optimal batch size using binary search.
+
         Returns:
             The optimal batch size
         """
@@ -260,7 +263,7 @@ def find_optimal_batch_size(
         min_batch_size: Minimum batch size to try
         max_batch_size: Maximum batch size to try
         search_method: Search method ('binary' or 'linear')
-        gpu_id: GPU device to use (default: 0)
+        gpu_id: GPU device to use
 
     Returns:
         The optimal batch size

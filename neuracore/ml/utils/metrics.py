@@ -15,11 +15,11 @@ class MetricsLogger:
     """Log and store training metrics."""
 
     @abstractmethod
-    def log_training_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_training_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         pass
 
     @abstractmethod
-    def log_validation_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_validation_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         pass
 
 
@@ -38,21 +38,21 @@ class LocalMetricsLogger:
         # Load existing metrics if resuming
         self._load_existing_metrics()
 
-    def log_training_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_training_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         """Log training metrics for current epoch."""
         metric_entry = {"epoch": epoch, "timestamp": time.time(), **metrics}
         self.train_metrics.append(metric_entry)
         if epoch % self.log_every == 0:
             self._save_metrics("train")
 
-    def log_validation_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_validation_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         """Log validation metrics for current epoch."""
         metric_entry = {"epoch": epoch, "timestamp": time.time(), **metrics}
         self.val_metrics.append(metric_entry)
         if epoch % self.log_every == 0:
             self._save_metrics("validation")
 
-    def _load_existing_metrics(self):
+    def _load_existing_metrics(self) -> None:
         """Load existing metrics when resuming training."""
         try:
             train_path = self.local_dir / "train_metrics.json"
@@ -66,7 +66,7 @@ class LocalMetricsLogger:
         except Exception as e:
             logger.warning(f"Failed to load existing metrics: {str(e)}")
 
-    def _save_metrics(self, metric_type: str):
+    def _save_metrics(self, metric_type: str) -> None:
         """Save metrics to storage."""
         try:
             metrics_list = (
@@ -100,7 +100,7 @@ class GCPMetricsLogger:
         self.train_metrics: list[dict[str, Any]] = []
         self.val_metrics: list[dict[str, Any]] = []
 
-    def log_training_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_training_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         """Log training metrics for current epoch."""
         metric_entry = {"epoch": epoch, "timestamp": time.time(), **metrics}
         self.train_metrics.append(metric_entry)
@@ -108,7 +108,7 @@ class GCPMetricsLogger:
             self._save_metrics("train")
             self.train_metrics.clear()
 
-    def log_validation_metrics(self, metrics: dict[str, float], epoch: int):
+    def log_validation_metrics(self, metrics: dict[str, float], epoch: int) -> None:
         """Log validation metrics for current epoch."""
         metric_entry = {"epoch": epoch, "timestamp": time.time(), **metrics}
         self.val_metrics.append(metric_entry)
@@ -127,7 +127,7 @@ class GCPMetricsLogger:
             .collection(metric_type)
         )
 
-    def _save_metrics(self, metric_type: str):
+    def _save_metrics(self, metric_type: str) -> None:
         """Save metrics to storage."""
         try:
             metrics_list = (

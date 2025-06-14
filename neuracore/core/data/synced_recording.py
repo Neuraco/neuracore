@@ -1,9 +1,12 @@
+"""Synchronized recording iterator."""
+
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Union, cast
 
 import av
+import numpy as np
 import requests
 import wget
 from PIL import Image
@@ -22,7 +25,7 @@ if TYPE_CHECKING:
 
 
 class SynchronizedRecording:
-    """Synchronized recording iterator for video data with parallel downloading."""
+    """Synchronized recording iterator."""
 
     def __init__(
         self,
@@ -61,7 +64,14 @@ class SynchronizedRecording:
         self._iter_idx = 0
 
     def _get_synced_data(self) -> SyncedData:
-        """Retrieve synchronized metadata for the recording."""
+        """Retrieve synchronized metadata for the recording.
+
+        Returns:
+            SyncedData object containing synchronized frames and metadata.
+
+        Raises:
+            requests.HTTPError: If the API request fails.
+        """
         auth = get_auth()
         response = requests.post(
             f"{API_URL}/synchronize/synchronize-recording",
@@ -76,7 +86,18 @@ class SynchronizedRecording:
         return SyncedData.model_validate(response.json())
 
     def _get_video_url(self, camera_type: str, camera_id: str) -> str:
-        """Get streaming URL for a specific camera's video data."""
+        """Get streaming URL for a specific camera's video data.
+
+        Args:
+            camera_type: Type of camera (e.g., "rgbs", "depths").
+            camera_id: Unique identifier for the camera.
+
+        Returns:
+            URL string for downloading the video file.
+
+        Raises:
+            requests.HTTPError: If the API request fails.
+        """
         auth = get_auth()
         response = requests.get(
             f"{API_URL}/recording/{self.id}/download_url",
@@ -89,7 +110,13 @@ class SynchronizedRecording:
     def _download_video(
         self, camera_type: str, camera_id: str, video_cache_path: Path
     ) -> None:
-        """Download a single video using wget with progress bar."""
+        """Download a single video using wget with progress bar.
+
+        Args:
+            camera_type: Type of camera (e.g., "rgbs", "depths").
+            camera_id: Unique identifier for the camera.
+            video_cache_path: Path to the directory where videos are cached.
+        """
         video_file = video_cache_path / f"{camera_id}.mp4"
 
         if video_file.exists():
@@ -104,8 +131,12 @@ class SynchronizedRecording:
         print(f"Downloading {camera_type}/{camera_id} video...")
         wget.download(url, str(video_file))
 
-    def _ensure_videos_downloaded(self, camera_type: str = None) -> None:
-        """Download videos for specific camera type or all videos if not already downloaded."""
+    def _ensure_videos_downloaded(self, camera_type: str) -> None:
+        """Download videos for specific camera type if not already downloaded.
+
+        Args:
+            camera_type: Type of camera (e.g., "rgbs", "depths").
+        """
         if not self.cache_dir:
             return
 
@@ -155,7 +186,19 @@ class SynchronizedRecording:
         cam_metadata: dict[str, CameraData],
         t0_cam_metadata: dict[str, CameraData],
     ) -> list[Image.Image]:
-        """Get video frames for multiple cameras with proper timing synchronization."""
+        """Get video frames for multiple cameras with timing synchronization.
+
+        Args:
+            camera_type: Type of camera (e.g., "rgbs", "depths").
+            cam_metadata: Dictionary of camera metadata with camera IDs as keys.
+            t0_cam_metadata: Metadata for the first frame of each camera type.
+
+        Returns:
+            List of synchronized PIL Image frames for each camera.
+
+        Raises:
+            ValueError: If no frames are found for a camera at the specified timestamp.
+        """
         camera_ids = list(cam_metadata.keys())
 
         if self.cache_dir:
@@ -167,9 +210,7 @@ class SynchronizedRecording:
                 video_file = video_cache_path / f"{cam_id}.mp4"
                 if not video_file.exists():
                     # Ensure space before downloading
-                    self.cache_manager.ensure_space_available(
-                        100_000_000
-                    )  # Estimate 100MB per video
+                    self.cache_manager.ensure_space_available()
                     self._download_video(camera_type, cam_id, video_cache_path)
 
         image_frame_for_each_camera = []
@@ -198,7 +239,8 @@ class SynchronizedRecording:
 
             if not cam_frame:
                 raise ValueError(
-                    f"No frame found for {camera_type}/{cam_id} at timestamp {cam_data.timestamp}"
+                    f"No frame found for {camera_type}/{cam_id} "
+                    f"at timestamp {cam_data.timestamp}"
                 )
 
             image_frame_for_each_camera.append(cam_frame)
@@ -209,9 +251,14 @@ class SynchronizedRecording:
     def _populate_video_frames(
         self,
         camera_data: dict[str, CameraData],
-        transform_fn=None,
-    ):
-        """Populate video frames for camera data using the original timing-based approach."""
+        transform_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ) -> None:
+        """Populate video frames for camera data.
+
+        Args:
+            camera_data: Dictionary of camera data with camera IDs as keys.
+            transform_fn: Optional function to transform frames (e.g., rgb_to_depth).
+        """
         camera_type = "rgbs" if transform_fn is None else "depths"
 
         # Ensure videos for this camera type are downloaded
@@ -237,7 +284,14 @@ class SynchronizedRecording:
                 cam_data.frame = None
 
     def __next__(self) -> SyncPoint:
-        """Get the next synchronized data point in the episode."""
+        """Get the next synchronized data point in the episode.
+
+        Returns:
+            SyncPoint object containing synchronized data for the next timestep.
+
+        Raises:
+            StopIteration: When all timesteps have been processed.
+        """
         if self._iter_idx >= len(self._recording_synced.frames):
             raise StopIteration
 
@@ -254,29 +308,40 @@ class SynchronizedRecording:
         self._iter_idx += 1
         return sync_point
 
-    def __iter__(self):
-        """Initialize iteration over the episode."""
+    def __iter__(self) -> "SynchronizedRecording":
+        """Initialize iteration over the episode.
+
+        Returns:
+            SynchronizedRecording instance for iteration.
+        """
         self._iter_idx = 0
         return self
 
-    def __enter__(self):
-        """Context manager entry point."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit point that ensures proper cleanup."""
-        pass
-
     def __len__(self) -> int:
-        """Get the number of timesteps in the episode."""
+        """Get the number of timesteps in the episode.
+
+        Returns:
+            int: Number of timesteps in the episode.
+        """
         return self._episode_length
 
-    def __getitem__(self, idx) -> SyncPoint:
-        """Support for indexing episode data."""
+    def __getitem__(self, idx: Union[int, slice]) -> Union[SyncPoint | list[SyncPoint]]:
+        """Support for indexing episode data.
+
+        Args:
+            idx: Integer index or slice object for accessing sync points.
+
+        Returns:
+            SyncPoint object for single index or list of SyncPoint objects for slice.
+
+        Raises:
+            IndexError: If the index is out of range.
+            TypeError: If the index is not an integer or slice.
+        """
         if isinstance(idx, slice):
             # Handle slice objects
             start, stop, step = idx.indices(len(self))
-            return [self[i] for i in range(start, stop, step)]
+            return [cast(SyncPoint, self[i]) for i in range(start, stop, step)]
 
         if idx < 0:
             idx += len(self)

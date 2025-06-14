@@ -1,3 +1,5 @@
+"""Monitor CPU RAM and GPU VRAM usage to prevent out of memory errors."""
+
 import logging
 import os
 
@@ -10,7 +12,13 @@ logger = logging.getLogger(__name__)
 class OutOfMemoryError(Exception):
     """Custom exception for GPU or RAM out of memory."""
 
-    def __init__(self, message, device="unknown"):
+    def __init__(self, message: str, device: str = "unknown"):
+        """Init.
+
+        Args:
+            message: Error message describing the out of memory condition
+            device: Device where the error occurred (e.g., "CPU", "GPU:0")
+        """
         super().__init__(f"Out of Memory on {device}: {message}")
         self.device = device
 
@@ -24,7 +32,8 @@ class MemoryMonitor:
         max_gpu_utilization: float = 0.9,
         gpu_id: int | None = 0,
     ):
-        """
+        """Init.
+
         Args:
             max_ram_utilization: Fraction of system RAM allowed (e.g., 0.9 = 90%)
             max_gpu_utilization: Fraction of GPU VRAM allowed
@@ -35,8 +44,14 @@ class MemoryMonitor:
         self.gpu_id = gpu_id
         self.process = psutil.Process(os.getpid())
 
-    def check_memory(self, log: bool = False):
-        """Raise OutOfMemoryError if memory is close to system limits."""
+    def check_memory(self, log: bool = False) -> None:
+        """Raise OutOfMemoryError if memory is close to system limits.
+
+        Args:
+            log: Whether to log memory usage information
+        Raises:
+            OutOfMemoryError: If RAM or GPU memory usage exceeds limits
+        """
         ram = psutil.virtual_memory()
         ram_used_ratio = ram.used / ram.total
         if log:

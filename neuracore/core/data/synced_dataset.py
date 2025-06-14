@@ -1,4 +1,4 @@
-"""TODO."""
+"""SynchronizedDataset class for managing synchronized datasets."""
 
 import logging
 from typing import TYPE_CHECKING, Optional, Union
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class SynchronizedDataset:
-    """TODO"""
+    """Class for managing synchronized datasets."""
 
     def __init__(
         self,
@@ -27,9 +27,10 @@ class SynchronizedDataset:
         """Initialize a dataset from server response data.
 
         Args:
-            dataset_dict: Dictionary containing dataset metadata from the server.
-            recordings: Optional list of recording dictionaries. If not provided,
-                recordings will be fetched from the server.
+            dataset: Dataset object containing recordings.
+            frequency: Frequency of the dataset in Hz.
+            data_types: List of data types to include in the dataset.
+            dataset_description: Description of the dataset.
         """
         self.dataset = dataset
         self.frequency = frequency
@@ -53,7 +54,9 @@ class SynchronizedDataset:
         """
         return len(self.dataset)
 
-    def __getitem__(self, idx) -> Union["SynchronizedRecording", "SynchronizedDataset"]:
+    def __getitem__(
+        self, idx: Union[int, slice]
+    ) -> Union["SynchronizedRecording", "SynchronizedDataset"]:
         """Support for indexing and slicing dataset episodes.
 
         Args:
@@ -87,8 +90,8 @@ class SynchronizedDataset:
                 if not 0 <= idx < len(self.dataset.recordings):
                     raise IndexError("Dataset index out of range")
                 return SynchronizedRecording(
+                    recording_id=self.dataset.recordings[idx]["id"],
                     dataset=self.dataset,
-                    recording=self.dataset.recordings[idx],
                     frequency=self.frequency,
                     data_types=self.data_types,
                 )
@@ -96,7 +99,7 @@ class SynchronizedDataset:
                 f"Dataset indices must be integers or slices, not {type(idx)}"
             )
 
-    def __next__(self):
+    def __next__(self) -> SynchronizedRecording:
         """Get the next episode in the dataset iteration.
 
         Returns:

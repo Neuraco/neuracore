@@ -1,8 +1,10 @@
+"""PyTorch dataset for loading synchronized robot data with filesystem caching."""
+
 import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import numpy as np
 import torch
@@ -39,6 +41,16 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             Callable[[list[str]], tuple[torch.Tensor, torch.Tensor]]
         ] = None,
     ):
+        """Initialize the dataset.
+
+        Args:
+            synchronized_dataset: The synchronized dataset to load data from.
+            input_data_types: List of input data types to include in the dataset.
+            output_data_types: List of output data types to include in the dataset.
+            output_prediction_horizon: Number of future timesteps to predict.
+            cache_dir: Directory to use for caching data.
+            tokenize_text: Optional function to tokenize text data.
+        """
         if not isinstance(synchronized_dataset, SynchronizedDataset):
             raise TypeError(
                 "synchronized_dataset must be an instance of SynchronizedDataset"
@@ -67,18 +79,6 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
         )
         self._mem_check_counter = 0
 
-        # So we know how many frames to get(?)
-        number_of_rgb_frames_to_get = 1
-        if DataType.RGB_IMAGE in self.output_data_types:
-            number_of_rgb_frames_to_get = self.output_prediction_horizon + 1
-        number_of_depth_frames_to_get = 1
-        if DataType.DEPTH_IMAGE in self.output_data_types:
-            number_of_depth_frames_to_get = self.output_prediction_horizon + 1
-        synchronized_dataset.configure_frame_retrieval(
-            number_of_rgb_frames_to_get=number_of_rgb_frames_to_get,
-            number_of_depth_frames_to_get=number_of_depth_frames_to_get,
-        )
-
     @staticmethod
     def _get_timestep(episode_length: int) -> int:
         max_start = max(0, episode_length)
@@ -93,9 +93,8 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             self._mem_check_counter = 0
         self._mem_check_counter += 1
         try:
-            synced_recording: SynchronizedRecording = self.synchronized_dataset[
-                episode_idx
-            ]
+            synced_recording = self.synchronized_dataset[episode_idx]
+            synced_recording = cast(SynchronizedRecording, synced_recording)
             sync_points = synced_recording._recording_synced.frames
             episode_length = len(sync_points)
             timestep = timestep or self._get_timestep(episode_length)
@@ -137,6 +136,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                         future_frames = [
                             [cam_data.frame for cam_data in sp.rgb_images.values()]
                             for sp in future_sync_points
+                            if sp.rgb_images is not None
                         ]
                         sample.outputs.rgb_images = (
                             self._create_camera_maskable_output_data(future_frames)
@@ -156,6 +156,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                         future_frames = [
                             [cam_data.frame for cam_data in sp.depth_images.values()]
                             for sp in future_sync_points
+                            if sp.depth_images is not None
                         ]
                         sample.outputs.depth_images = (
                             self._create_camera_maskable_output_data(future_frames)
@@ -172,7 +173,11 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                     if DataType.JOINT_POSITIONS in self.output_data_types:
                         sample.outputs.joint_positions = (
                             self._create_joint_maskable_output_data(
-                                [sp.joint_positions for sp in future_sync_points],
+                                [
+                                    sp.joint_positions
+                                    for sp in future_sync_points
+                                    if sp.joint_positions is not None
+                                ],
                                 self.dataset_description.joint_positions.max_len,
                             )
                         )
@@ -188,7 +193,11 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                     if DataType.JOINT_VELOCITIES in self.output_data_types:
                         sample.outputs.joint_velocities = (
                             self._create_joint_maskable_output_data(
-                                [sp.joint_velocities for sp in future_sync_points],
+                                [
+                                    sp.joint_velocities
+                                    for sp in future_sync_points
+                                    if sp.joint_velocities is not None
+                                ],
                                 self.dataset_description.joint_velocities.max_len,
                             )
                         )
@@ -204,7 +213,11 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                     if DataType.JOINT_TORQUES in self.output_data_types:
                         sample.outputs.joint_torques = (
                             self._create_joint_maskable_output_data(
-                                [sp.joint_torques for sp in future_sync_points],
+                                [
+                                    sp.joint_torques
+                                    for sp in future_sync_points
+                                    if sp.joint_torques is not None
+                                ],
                                 self.dataset_description.joint_torques.max_len,
                             )
                         )
@@ -229,12 +242,20 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                             jtp_points.append(jtp_points[-1])
                         sample.outputs.joint_target_positions = (
                             self._create_joint_maskable_output_data(
-                                [sp.joint_target_positions for sp in jtp_points],
+                                [
+                                    sp.joint_target_positions
+                                    for sp in jtp_points
+                                    if sp.joint_target_positions is not None
+                                ],
                                 self.dataset_description.joint_target_positions.max_len,
                             )
                         )
 
                 if sync_point.language_data:
+                    if self.tokenize_text is None:
+                        raise ValueError(
+                            "Failed to initialize tokenize_text for DataType.LANGUAGE"
+                        )
                     input_ids, attention_mask = self.tokenize_text(
                         [sync_point.language_data.text]
                     )
@@ -329,8 +350,9 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
     ) -> MaskableData:
         """Create maskable data for multiple cameras.
 
-        Arguments:
+        Args:
             temporal_camera_data: A list of lists of shape [T, CAMS, ...].
+
         Returns:
             MaskableData: A MaskableData object containing the stacked camera images
                 and their masks of shape [T, CAMS, C, H, W].

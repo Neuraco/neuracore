@@ -6,7 +6,7 @@ including algorithm discovery, dataset resolution, and job status tracking.
 
 import concurrent
 import json
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import requests
 
@@ -82,16 +82,8 @@ def start_training_run(
         requests.exceptions.HTTPError: If the API request fails
         requests.exceptions.RequestException: If there is a network problem
     """
-    # Get dataset id
-    dataset_jsons = Dataset._get_datasets()
-    dataset_id = None
-    for dataset_json in dataset_jsons:
-        if dataset_json["name"] == dataset_name:
-            dataset_id = dataset_json["id"]
-            break
-
-    if dataset_id is None:
-        raise ValueError(f"Dataset {dataset_name} not found")
+    dataset = cast(Dataset, Dataset.get(dataset_name))
+    dataset_id = dataset.id
 
     # Get algorithm id
     algorithm_jsons = _get_algorithms()

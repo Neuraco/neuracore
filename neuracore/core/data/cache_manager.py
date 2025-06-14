@@ -1,3 +1,5 @@
+"""Cache manager to handle disk space usage for cache files."""
+
 import logging
 import random
 import shutil
@@ -15,8 +17,7 @@ class CacheManager:
         max_usage_percent: float = 80.0,
         check_interval: int = 100,
     ):
-        """
-        Initialize the cache manager.
+        """Initialize the cache manager.
 
         Args:
             cache_dir: The directory where cache files are stored
@@ -31,8 +32,12 @@ class CacheManager:
         # Create cache directory if it doesn't exist
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_disk_stats(self):
-        """Get total and available disk space for the partition containing the cache."""
+    def get_disk_stats(self) -> dict[str, float]:
+        """Get total and available disk space for the partition containing the cache.
+
+        Returns:
+            A dictionary with total, used, free space and percent used.
+        """
         stats = shutil.disk_usage(self.cache_dir)
         return {
             "total": stats.total,
@@ -41,20 +46,23 @@ class CacheManager:
             "percent_used": (stats.used / stats.total) * 100,
         }
 
-    def get_cache_size(self):
-        """Calculate the total size of the cache directory."""
+    def get_cache_size(self) -> int:
+        """Calculate the total size of the cache directory.
+
+        Returns:
+            Total size of cache files in bytes.
+        """
         total_size = 0
         for entry in self.cache_dir.glob("**/*"):
             if entry.is_file():
                 total_size += entry.stat().st_size
         return total_size
 
-    def cleanup_cache(self, percent_to_remove: float = 20.0):
-        """
-        Remove random cache files to free up space.
+    def cleanup_cache(self, percent_to_remove: float = 20.0) -> None:
+        """Remove random cache files to free up space.
 
         Args:
-            percent_to_remove: Percentage of cache files to remove (default: 20%)
+            percent_to_remove: Percentage of cache files to remove
         """
         # Get all cache files
         cache_files = []
@@ -87,9 +95,9 @@ class CacheManager:
             f"files ({bytes_removed / (1024*1024):.2f} MB)"
         )
 
-    def ensure_space_available(self, force_check=False):
-        """
-        Check if cache is using too much space and clean up if necessary.
+    def ensure_space_available(self, force_check: bool = False) -> bool:
+        """Check if cache is using too much space and clean up if necessary.
+
         Only performs the check periodically based on the check_interval.
 
         Args:

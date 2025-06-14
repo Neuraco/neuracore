@@ -1,4 +1,4 @@
-"""TODO"""
+"""Recording class for managing synchronized data streams in a dataset."""
 
 from typing import TYPE_CHECKING, Optional
 
@@ -12,12 +12,10 @@ if TYPE_CHECKING:
 
 
 class Recording:
-    """Iterator for streaming synchronized data from a single recording episode.
+    """Class representing a recording episode in a dataset.
 
-    This class provides efficient streaming access to robot demonstration data
-    including video frames from multiple cameras, depth data, and sensor
-    information. It manages concurrent video streams and synchronizes data
-    according to the episode's timestamp information.
+    This class provides methods to synchronize the recording with a specified
+    frequency and data types, and to iterate over the synchronized data.
     """
 
     def __init__(self, dataset: "Dataset", recording_id: str, size_bytes: int):
@@ -25,7 +23,8 @@ class Recording:
 
         Args:
             dataset: Parent Dataset instance.
-            recording: Recording dictionary containing episode metadata.
+            recording_id: Unique identifier for the recording episode.
+            size_bytes: Size of the recording episode in bytes.
         """
         self.dataset = dataset
         self.id = recording_id
@@ -56,6 +55,12 @@ class Recording:
         )
 
     def __iter__(self) -> None:
+        """Initialize iterator over synchronized recording data.
+
+        Raises:
+            RuntimeError: Always raised to indicate that this method is not
+            supported for unsynchronized recordings.
+        """
         raise RuntimeError(
             "Only synchronized recordings can be iterated over. "
             "Use the synchronize method to create a synchronized recording."

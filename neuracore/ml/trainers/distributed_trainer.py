@@ -1,3 +1,5 @@
+"""Distributed Trainer for Neuracore Models."""
+
 import logging
 import os
 import time
@@ -99,7 +101,11 @@ class DistributedTrainer:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     def train_epoch(self) -> dict[str, float]:
-        """Run one epoch of training."""
+        """Run one epoch of training.
+
+        Returns:
+            A dictionary of averaged metrics for the epoch
+        """
         self.model.train()
         epoch_losses = []
         epoch_metrics = []
@@ -152,7 +158,11 @@ class DistributedTrainer:
         return avg_metrics
 
     def validate(self) -> dict[str, float]:
-        """Run validation."""
+        """Run validation.
+
+        Returns:
+            A dictionary of averaged validation metrics
+        """
         self.model.train()  # So we can get losses
         val_losses = []
         val_metrics = []
@@ -309,14 +319,24 @@ class DistributedTrainer:
 
         return averaged_metrics
 
-    def get_model_without_ddp(self):
-        """Get the model without DDP wrapper."""
+    def get_model_without_ddp(self) -> nn.Module:
+        """Get the model without DDP wrapper.
+
+        Returns:
+            The underlying model if wrapped in DDP, or the model itself otherwise.
+        """
         if isinstance(self.model, DDP):
             return self.model.module
         return self.model
 
     def save_checkpoint(self, epoch: int, metrics: dict, is_best: bool = False) -> None:
-        """Save checkpoint with metadata."""
+        """Save checkpoint with metadata.
+
+        Args:
+            epoch: Current epoch number
+            metrics: Metrics to save in the checkpoint
+            is_best: Whether this is the best model so far
+        """
         if not self.save_checkpoints or self.rank != 0:
             return
         logger.info("Saving checkpoint...")
@@ -342,7 +362,14 @@ class DistributedTrainer:
         logger.info("... checkpoint saved!")
 
     def load_checkpoint(self, path: str) -> dict:
-        """Load checkpoint and restore training state."""
+        """Load checkpoint and restore training state.
+
+        Args:
+            path: Path to the checkpoint file
+
+        Returns:
+            A dictionary containing the checkpoint data
+        """
         checkpoint = self.storage_handler.load_checkpoint(path)
 
         # Handle model loading (different for DDP vs non-DDP models)

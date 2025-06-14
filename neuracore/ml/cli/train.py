@@ -112,13 +112,13 @@ def create_parser():
     # local_parser = subparsers.add_parser(
     #     "local", parents=[parent_parser], help="Run training locally"
     # )
-    local_parser.add_argument(
+    parent_parser.add_argument(
         "--local_output_dir",
         type=str,
         default="./output",
         help="Local directory for outputs when training locally",
     )
-    local_parser.add_argument(
+    parent_parser.add_argument(
         "--algorithm_path",
         type=str,
         required=True,
@@ -135,7 +135,7 @@ def create_parser():
     # gcp_parser.add_argument(
     #     "--algorithm_id", type=str, required=True, help="Algorithm ID"
     # )
-    gcp_parser.add_argument(
+    parent_parser.add_argument(
         "--algorithm_config",
         type=str,
         required=True,

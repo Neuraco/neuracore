@@ -1,10 +1,4 @@
-"""Dataset management and streaming for Neuracore robot recordings.
-
-This module provides classes for managing datasets, streaming episodes,
-and iterating over synchronized robot data including video frames and
-sensor information. It supports both organizational and shared datasets
-with efficient streaming capabilities.
-"""
+"""Dataset management."""
 
 import logging
 import tempfile
@@ -30,13 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class Dataset:
-    """Represents a dataset containing robot demonstration recordings.
-
-    This class provides access to collections of robot recordings that can be
-    streamed for analysis or used for training machine learning models. It
-    supports both organizational and shared datasets with efficient iteration
-    over episodes and synchronized data access.
-    """
+    """Class representing a dataset in Neuracore."""
 
     def __init__(
         self,
@@ -50,6 +38,13 @@ class Dataset:
         """Initialize a dataset from server response data.
 
         Args:
+            id: Unique identifier for the dataset.
+            name: Name of the dataset.
+            size_bytes: Size of the dataset in bytes.
+            tags: List of tags associated with the dataset.
+            is_shared: Whether the dataset is shared/open-source.
+            recordings: Optional list of recordings in the dataset.
+                If not provided, recordings will be fetched from the server.
         """
         self.id = id
         self.name = name
@@ -62,7 +57,14 @@ class Dataset:
         self.cache_dir = DEFAULT_CACHE_DIR
 
     def _get_recordings(self) -> list[dict]:
-        """Get the list of recordings in the dataset."""
+        """Get the list of recordings in the dataset.
+
+        Returns:
+            List of recordings in the dataset.
+
+        Raises:
+            requests.HTTPError: If the API request fails.
+        """
         auth = get_auth()
         response = requests.get(
             f"{API_URL}/datasets/{self.id}/recordings", headers=auth.get_headers()
@@ -74,9 +76,6 @@ class Dataset:
     @staticmethod
     def get(name: str, non_exist_ok: bool = False) -> Optional["Dataset"]:
         """Retrieve an existing dataset by name.
-
-        Searches through both organizational and shared datasets to find
-        a dataset with the specified name.
 
         Args:
             name: Name of the dataset to retrieve.
@@ -187,6 +186,21 @@ class Dataset:
     def _synchronize(
         self, frequency: int = 0, data_types: Optional[list[DataType]] = None
     ) -> SyncedDataset:
+        """Synchronize the dataset with specified frequency and data types.
+
+        Args:
+            frequency: Frequency at which to synchronize the dataset.
+                If 0, uses the default frequency.
+            data_types: List of DataType to include in synchronization.
+                If None, uses the default data types from the dataset.
+
+        Returns:
+            SyncedDataset instance containing synchronized data.
+
+        Raises:
+            requests.HTTPError: If the API request fails.
+            DatasetError: If frequency is not greater than 0.
+        """
         response = requests.post(
             f"{API_URL}/synchronize/synchronize-dataset",
             headers=get_auth().get_headers(),
@@ -203,11 +217,26 @@ class Dataset:
     def synchronize(
         self, frequency: int = 0, data_types: Optional[list[DataType]] = None
     ) -> SynchronizedDataset:
+        """Synchronize the dataset with specified frequency and data types.
+
+        Args:
+            frequency: Frequency at which to synchronize the dataset.
+                If 0, uses the default frequency.
+            data_types: List of DataType to include in synchronization.
+                If None, uses the default data types from the dataset.
+
+        Returns:
+            SynchronizedDataset instance containing synchronized data.
+
+        Raises:
+            requests.HTTPError: If the API request fails.
+            DatasetError: If frequency is not greater than 0.
+        """
         synced_dataset = self._synchronize(frequency=frequency, data_types=data_types)
         total = synced_dataset.num_demonstrations
         processed = synced_dataset.num_processed_demonstrations
         if total != processed:
-            pbar = tqdm(total=total, desc="Synchronizing dataset", unit="episode")
+            pbar = tqdm(total=total, desc="Synchronizing dataset", unit="recording")
             pbar.n = processed
             pbar.refresh()
             while processed < total:
@@ -230,30 +259,30 @@ class Dataset:
         )
 
     def __iter__(self) -> "Dataset":
-        """Initialize iterator over episodes in the dataset.
+        """Initialize iterator over recordings in the dataset.
 
         Returns:
-            Self for iteration over episodes.
+            Self for iteration over recordings.
         """
         return self
 
     def __len__(self) -> int:
-        """Get the number of episodes in the dataset.
+        """Get the number of recordings in the dataset.
 
         Returns:
-            Number of demonstration episodes in the dataset.
+            Number of demonstration recordings in the dataset.
         """
         return self.num_recordings
 
-    def __getitem__(self, idx) -> Union[Recording, "Dataset"]:
-        """Support for indexing and slicing dataset episodes.
+    def __getitem__(self, idx: Union[int, slice]) -> Union[Recording, "Dataset"]:
+        """Support for indexing and slicing dataset recordings.
 
         Args:
-            idx: Integer index or slice object for accessing episodes.
+            idx: Integer index or slice object for accessing recordings.
 
         Returns:
-            For integer indices: EpisodeIterator for the specified episode.
-            For slices: New Dataset containing the selected episodes.
+            Recording instance for a single recording if idx is an integer,
+            or a new Dataset instance if idx is a slice.
 
         Raises:
             IndexError: If the index is out of range.
@@ -287,14 +316,14 @@ class Dataset:
                 f"Dataset indices must be integers or slices, not {type(idx)}"
             )
 
-    def __next__(self):
-        """Get the next episode in the dataset iteration.
+    def __next__(self) -> Recording:
+        """Get the next recording in the dataset iteration.
 
         Returns:
-            EpisodeIterator for the next episode.
+            Recording instance for the next recording in the dataset.
 
         Raises:
-            StopIteration: When all episodes have been processed.
+            StopIteration: If there are no more recordings to iterate over.
         """
         if self._recording_idx >= len(self.recordings):
             raise StopIteration
