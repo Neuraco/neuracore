@@ -14,6 +14,7 @@ import torch
 import torchvision.transforms as T
 from torch.utils.data import Dataset
 
+import neuracore as nc
 from neuracore.core.nc_types import DataType
 from neuracore.ml import BatchedTrainingSamples, MaskableData
 from neuracore.ml.core.ml_types import BatchedData
@@ -73,12 +74,6 @@ class PytorchNeuracoreDataset(Dataset, ABC):
 
         # Create tokenizer if language data is used
         self.tokenize_text = tokenize_text
-        # if DataType.LANGUAGE in self.data_types and tokenize_text is None:
-        #     raise ValueError(
-        #         "Tokenizer not provided but language data requested. "
-        #         "Please provide a tokenizer function."
-        #     )
-
         self._error_count = 0
         self._max_error_count = 1
 
@@ -126,6 +121,8 @@ class PytorchNeuracoreDataset(Dataset, ABC):
         Raises:
             Exception: If sample loading fails after exhausting retry attempts.
         """
+        # Ensure we are logged in on each data loader thread
+        nc.login()
         while self._error_count < self._max_error_count:
             try:
                 episode_idx = idx % self.num_recordings

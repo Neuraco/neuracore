@@ -62,6 +62,7 @@ class SynchronizedRecording:
         )
 
         self._iter_idx = 0
+        self._suppress_wget_progress = True
 
     def _get_synced_data(self) -> SyncedData:
         """Retrieve synchronized metadata for the recording.
@@ -125,11 +126,12 @@ class SynchronizedRecording:
 
         # Ensure cache space is available before downloading
         self.cache_manager.ensure_space_available()
-
         url = self._get_video_url(camera_type, camera_id)
-
-        print(f"Downloading {camera_type}/{camera_id} video...")
-        wget.download(url, str(video_file))
+        wget.download(
+            url,
+            str(video_file),
+            bar=None if self._suppress_wget_progress else wget.bar_adaptive,
+        )
 
     def _ensure_videos_downloaded(self, camera_type: str) -> None:
         """Download videos for specific camera type if not already downloaded.
@@ -156,10 +158,6 @@ class SynchronizedRecording:
             camera_ids = self._camera_ids[cam_type]
             if not camera_ids:
                 continue
-
-            logger.info(
-                f"Downloading {len(camera_ids)} {cam_type} videos in parallel..."
-            )
 
             # Download videos in parallel
             with ThreadPoolExecutor(max_workers=4) as executor:

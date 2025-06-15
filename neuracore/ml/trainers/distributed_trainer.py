@@ -110,8 +110,6 @@ class DistributedTrainer:
             max_ram_utilization=0.8, max_gpu_utilization=0.95
         )
 
-        # self.training_logger.log_model_graph(self.get_model_without_ddp())
-
         # Progress bar only on rank 0
         pbar = tqdm(
             self.train_loader, desc=f"Training Epoch {epoch}", disable=self.rank != 0

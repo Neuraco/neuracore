@@ -91,8 +91,7 @@ class TensorboardTrainingLogger(TrainingLogger):
         self._step_lock = threading.Lock()
 
         # Cloud sync setup
-        self._sync_thread = None
-        self._stop_sync = threading.Event()
+        # self._sync_thread = None
         self._last_sync_time = 0
 
         self._logging_upload_dir: str = ""
@@ -293,13 +292,13 @@ class TensorboardTrainingLogger(TrainingLogger):
 
     def close(self) -> None:
         """Close the logger and clean up resources."""
-        if self._sync_thread is not None:
-            self._stop_sync.set()
-            self._sync_thread.join(timeout=30)
+        # if self._sync_thread is not None:
+        #     self._stop_sync.set()
+        #     self._sync_thread.join(timeout=30)
 
-        # Final sync if in cloud mode
-        if self.mode == "cloud" and self.storage_handler is not None:
-            self._sync_to_cloud()
+        # # Final sync if in cloud mode
+        # if self.mode == "cloud" and self.storage_handler is not None:
+        #     self._sync_to_cloud()
 
         self.writer.close()
         logger.info("TensorBoard logger closed")

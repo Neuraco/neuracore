@@ -14,7 +14,7 @@ from PIL import Image
 from neuracore.core.data.cache_manager import CacheManager
 from neuracore.core.data.synced_dataset import SynchronizedDataset
 from neuracore.core.data.synced_recording import SynchronizedRecording
-from neuracore.core.nc_types import DataType, JointData
+from neuracore.core.nc_types import DataType, JointData, SyncPoint
 from neuracore.ml import BatchedTrainingSamples, MaskableData
 from neuracore.ml.datasets.pytorch_neuracore_dataset import PytorchNeuracoreDataset
 
@@ -97,8 +97,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
         try:
             synced_recording = self.synchronized_dataset[episode_idx]
             synced_recording = cast(SynchronizedRecording, synced_recording)
-            sync_points = synced_recording._recording_synced.frames
-            episode_length = len(sync_points)
+            episode_length = len(synced_recording)
             timestep = timestep or self._get_timestep(episode_length)
             tensor_cache_path = self.cache_dir / f"ep_{episode_idx}_frame_{timestep}.pt"
             if tensor_cache_path.exists():
@@ -113,11 +112,13 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                         (self.output_prediction_horizon,), dtype=torch.float32
                     ),
                 )
-                sync_points[0]
-                sync_point = sync_points[timestep]
-                future_sync_points = sync_points[
-                    timestep + 1 : timestep + 1 + self.output_prediction_horizon
-                ]
+                sync_point = cast(SyncPoint, synced_recording[timestep])
+                future_sync_points = cast(
+                    list[SyncPoint],
+                    synced_recording[
+                        timestep + 1 : timestep + 1 + self.output_prediction_horizon
+                    ],
+                )
                 # Padding for future sync points
                 for _ in range(
                     self.output_prediction_horizon - len(future_sync_points)
@@ -235,9 +236,12 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
                     if DataType.JOINT_TARGET_POSITIONS in self.output_data_types:
                         # We dont need to shift the sync_point by 1, since we are
                         # using the target joint positions as the action
-                        jtp_points = sync_points[
-                            timestep : timestep + self.output_prediction_horizon
-                        ]
+                        jtp_points = cast(
+                            list[SyncPoint],
+                            synced_recording[
+                                timestep : timestep + self.output_prediction_horizon
+                            ],
+                        )
                         for _ in range(
                             self.output_prediction_horizon - len(jtp_points)
                         ):
