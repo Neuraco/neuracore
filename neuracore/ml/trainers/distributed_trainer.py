@@ -1,8 +1,7 @@
-"""Distributed Trainer for Neuracore Models."""
+"""Distributed Trainer."""
 
 import logging
 import os
-import time
 import traceback
 from pathlib import Path
 from typing import Any, Optional
@@ -10,33 +9,35 @@ from typing import Any, Optional
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from neuracore_training.memory_monitor import MemoryMonitor, OutOfMemoryError
-from neuracore_training.metrics import MetricsLogger
-from neuracore_training.storage_handler import StorageHandler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from neuracore.ml import BatchedTrainingOutputs, NeuracoreModel
+from neuracore.ml.logging.training_logger import TrainingLogger
+from neuracore.ml.utils.memory_monitor import MemoryMonitor, OutOfMemoryError
+from neuracore.ml.utils.training_storage_handler import TrainingStorageHandler
 
 logger = logging.getLogger(__name__)
 
+# Only update the training metadata every N steps to avoid excessive API calls
+UPDATE_TRAINING_METADATA_EVERY = 10
+
 
 class DistributedTrainer:
-    """Trainer for distributed multi-GPU training on a single node."""
+    """Trainer for distributed multi-GPU training with TensorBoard logging."""
 
     def __init__(
         self,
         model: NeuracoreModel,
         train_loader: DataLoader,
         val_loader: DataLoader,
-        metrics_logger: MetricsLogger,
-        storage_handler: StorageHandler,
+        training_logger: TrainingLogger,
+        storage_handler: TrainingStorageHandler,
         output_dir: Path,
         algorithm_config: dict[str, Any],
         num_epochs: int,
         save_freq: int = 1,
-        validate_freq: int = 1,
         save_checkpoints: bool = True,
         clip_grad_norm: Optional[float] = None,
         rank: int = 0,
@@ -48,13 +49,12 @@ class DistributedTrainer:
             model: The model to train
             train_loader: DataLoader for training data
             val_loader: DataLoader for validation data
-            metrics_logger: Logger for metrics
+            training_logger: Logger for training metrics (TensorBoard, etc.)
             storage_handler: Handler for model storage
             output_dir: Directory for output files
             algorithm_config: Configuration for the algorithm
             num_epochs: Number of epochs to train
             save_freq: Frequency to save checkpoints (in epochs)
-            validate_freq: Frequency to run validation (in epochs)
             save_checkpoints: Whether to save checkpoints
             clip_grad_norm: Maximum norm for gradient clipping
             rank: Rank of this process
@@ -74,48 +74,53 @@ class DistributedTrainer:
 
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.metrics_logger = metrics_logger
+        self.training_logger = training_logger
         self.storage_handler = storage_handler
         self.output_dir = output_dir
         self.algorithm_config = algorithm_config
         self.num_epochs = num_epochs
         self.save_freq = save_freq
-        self.validate_freq = validate_freq
         self.save_checkpoints = save_checkpoints
         self.clip_grad_norm = clip_grad_norm
         self.rank = rank
         self.world_size = world_size
-
-        # Configure optimizer
-        if hasattr(model, "configure_optimizers"):
-            self.optimizers = model.configure_optimizers()
-        else:
-            self.optimizers = [torch.optim.Adam(model.parameters(), lr=1e-3)]
+        self.optimizers = model.configure_optimizers()
 
         # Initialize best metrics
         self.best_val_loss = float("inf")
+        self.global_train_step = 0
+        self.global_val_step = 0
 
         # Create checkpoint directory
         if rank == 0:
             self.checkpoint_dir = output_dir / "checkpoints"
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    def train_epoch(self) -> dict[str, float]:
+    def train_epoch(self, epoch: int) -> dict[str, float]:
         """Run one epoch of training.
+
+        Args:
+            epoch: Current epoch number
 
         Returns:
             A dictionary of averaged metrics for the epoch
         """
         self.model.train()
-        epoch_losses = []
-        epoch_metrics = []
+        epoch_losses: list[dict[str, float]] = []
+        epoch_metrics: list[dict[str, float]] = []
 
         memory_monitor = MemoryMonitor(
             max_ram_utilization=0.8, max_gpu_utilization=0.95
         )
 
-        for batch in tqdm(self.train_loader, desc="Training", disable=self.rank != 0):
+        self.training_logger.log_model_graph(self.get_model_without_ddp())
 
+        # Progress bar only on rank 0
+        pbar = tqdm(
+            self.train_loader, desc=f"Training Epoch {epoch}", disable=self.rank != 0
+        )
+
+        for batch_idx, batch in enumerate(pbar):
             memory_monitor.check_memory()
 
             # Move tensors to device and format batch
@@ -137,64 +142,82 @@ class DistributedTrainer:
             for optimizer in self.optimizers:
                 optimizer.step()
 
-            epoch_losses.append({
-                k: v.item() if isinstance(v, torch.Tensor) else v
-                for k, v in batch_output.losses.items()
-            })
-            epoch_metrics.append({
-                k: v.item() if isinstance(v, torch.Tensor) else v
-                for k, v in batch_output.metrics.items()
-            })
+            self._log_scalars(
+                batch_output.losses, self.global_train_step, prefix="train/step/loss"
+            )
+            self._log_scalars(
+                batch_output.metrics,
+                self.global_train_step,
+                prefix="train/step/metrics",
+            )
+            self._log_gradients(self.global_train_step)
+            self._log_weights(self.global_train_step)
+            pbar.set_postfix(
+                {"loss": f"{loss.item():.4f}", "step": self.global_train_step}
+            )
+            epoch_losses, epoch_metrics = self._accumulate_epoch_metrics(
+                batch_output, epoch_losses, epoch_metrics
+            )
+            self.global_train_step += 1
+            if (
+                self.rank == 0
+                and self.global_train_step % UPDATE_TRAINING_METADATA_EVERY == 0
+            ):
+                self.storage_handler.update_training_metadata(
+                    epoch=epoch, step=self.global_train_step
+                )
 
-        # Average metrics
-        avg_metrics = {}
-        for key in epoch_losses[0].keys():
-            avg_metrics[key] = sum(x[key] for x in epoch_losses) / len(epoch_losses)
+        avg_epoch_losses, avg_epoch_metrics = self._average_epoch_metrics(
+            epoch_losses, epoch_metrics, epoch
+        )
+        self._log_scalars(avg_epoch_losses, epoch, prefix="train/epoch/loss")
+        self._log_scalars(avg_epoch_metrics, epoch, prefix="train/epoch/metrics")
+        return avg_epoch_losses
 
-        # If distributed, synchronize metrics across processes
-        if self.world_size > 1:
-            avg_metrics = self._gather_metrics(avg_metrics)
-
-        return avg_metrics
-
-    def validate(self) -> dict[str, float]:
+    def validate(self, epoch: int) -> dict[str, float]:
         """Run validation.
+
+        Args:
+            epoch: Current epoch number
 
         Returns:
             A dictionary of averaged validation metrics
         """
-        self.model.train()  # So we can get losses
-        val_losses = []
-        val_metrics = []
+        self.model.train()  # Keep in train mode to get losses
+        val_losses: list[dict[str, float]] = []
+        val_metrics: list[dict[str, float]] = []
 
-        with torch.no_grad():
-            for batch in tqdm(
-                self.val_loader, desc="Validating", disable=self.rank != 0
-            ):
-                batch = batch.to(self.device)
+        pbar = tqdm(
+            self.val_loader,
+            desc=f"Validation Epoch {epoch}",
+            disable=self.rank != 0,
+        )
 
-                # Forward pass
-                batch_output: BatchedTrainingOutputs = self.model.training_step(batch)
+        for batch_idx, batch in enumerate(pbar):
+            batch = batch.to(self.device)
 
-                val_losses.append({
-                    k: v.item() if isinstance(v, torch.Tensor) else v
-                    for k, v in batch_output.losses.items()
-                })
-                val_metrics.append({
-                    k: v.item() if isinstance(v, torch.Tensor) else v
-                    for k, v in batch_output.metrics.items()
-                })
+            # Forward pass
+            batch_output: BatchedTrainingOutputs = self.model.training_step(batch)
 
-        # Average metrics
-        avg_metrics = {}
-        for key in val_losses[0].keys():
-            avg_metrics[key] = sum(x[key] for x in val_losses) / len(val_losses)
+            self._log_scalars(
+                batch_output.losses, self.global_val_step, prefix="val/step/loss"
+            )
+            self._log_scalars(
+                batch_output.metrics,
+                self.global_val_step,
+                prefix="val/step/metrics",
+            )
+            val_losses, val_metrics = self._accumulate_epoch_metrics(
+                batch_output, val_losses, val_metrics
+            )
+            self.global_val_step += 1
 
-        # If distributed, synchronize metrics across processes
-        if self.world_size > 1:
-            avg_metrics = self._gather_metrics(avg_metrics)
-
-        return avg_metrics
+        avg_losses, avg_metrics = self._average_epoch_metrics(
+            val_losses, val_metrics, epoch
+        )
+        self._log_scalars(avg_losses, self.global_val_step, prefix="val/epoch/loss")
+        self._log_scalars(avg_metrics, self.global_val_step, prefix="val/epoch/metrics")
+        return avg_losses
 
     def train(self, start_epoch: int = 0) -> None:
         """Run the training loop.
@@ -203,8 +226,11 @@ class DistributedTrainer:
             start_epoch: Epoch to start from (for resuming training)
         """
         if self.rank == 0:
-            self.storage_handler.save_metadata(0)
+            self.storage_handler.update_training_metadata(
+                epoch=start_epoch, step=self.global_train_step
+            )
 
+        err_msg: str = ""
         try:
             start_epoch = max(start_epoch, 1)
             for epoch in range(start_epoch, self.num_epochs + 1):
@@ -213,33 +239,15 @@ class DistributedTrainer:
                 if isinstance(self.train_loader.sampler, DistributedSampler):
                     self.train_loader.sampler.set_epoch(epoch)
 
-                # Training phase
-                if self.rank == 0:
-                    logger.info(f"Starting Epoch {epoch}")
-                    epoch_start_time = time.time()
-
-                train_metrics = self.train_epoch()
-
-                if self.rank == 0:
-                    logger.info(
-                        f"Epoch {epoch} took {time.time() - epoch_start_time:.2f}s"
-                    )
-
-                # Log training metrics (only from rank 0)
-                if self.rank == 0:
-                    self.metrics_logger.log_training_metrics(train_metrics, epoch=epoch)
-                    log_str = "Train - "
-                    log_str += ", ".join(
-                        f"{k}: {v:.4f}" for k, v in train_metrics.items()
-                    )
-                    logger.info(log_str)
+                train_loss_metrics = self.train_epoch(epoch)
 
                 # Save checkpoint and artifacts periodically (only from rank 0)
                 if self.rank == 0 and epoch % self.save_freq == 0:
-                    # Only save checkpoints with rank 0
-                    reduced_loss = sum(train_metrics.values()) / len(train_metrics)
+                    reduced_loss = sum(train_loss_metrics.values()) / len(
+                        train_loss_metrics
+                    )
                     is_best = reduced_loss < self.best_val_loss
-                    self.save_checkpoint(epoch, train_metrics, is_best=is_best)
+                    self.save_checkpoint(epoch, train_loss_metrics, is_best=is_best)
 
                     # Save model artifacts
                     self.storage_handler.save_model_artifacts(
@@ -247,77 +255,38 @@ class DistributedTrainer:
                         output_dir=self.output_dir,
                     )
 
-                # Validation phase
-                if epoch % self.validate_freq == 0:
-
-                    if self.rank == 0:
-                        logger.info(f"Starting Validation for Epoch {epoch}")
-                        val_start_t = time.time()
-
-                    val_metrics = self.validate()
-
-                    if self.rank == 0:
-                        logger.info(
-                            f"Val, epoch {epoch} took {time.time() - val_start_t:.2f}s"
-                        )
-
-                    # Log validation metrics (only from rank 0)
-                    if self.rank == 0:
-                        self.metrics_logger.log_validation_metrics(
-                            val_metrics, epoch=epoch
-                        )
-                        log_str = "Val - "
-                        log_str += ", ".join(
-                            f"{k}: {v:.4f}" for k, v in val_metrics.items()
-                        )
-                        logger.info(log_str)
-
-                        # Update learning rate based on validation loss
-                        reduced_loss = sum(val_metrics.values()) / len(val_metrics)
-
-                        # Update best validation loss
-                        if reduced_loss < self.best_val_loss:
-                            self.best_val_loss = reduced_loss
+                with torch.no_grad():
+                    self.validate(epoch)
 
                 # Save metadata
                 if self.rank == 0:
-                    self.storage_handler.save_metadata(epoch)
+                    self.storage_handler.update_training_metadata(
+                        epoch=epoch,
+                        step=self.global_train_step,
+                    )
+                    # Flush logger to ensure data is written
+                    if hasattr(self.training_logger, "flush"):
+                        self.training_logger.flush()
 
         except OutOfMemoryError:
             error_msg = (
                 f"Batch size {self.train_loader.batch_size} is too large. "
                 "Try reducing batch size or using a more powerful machine."
             )
-            logger.error(error_msg)
-            if self.rank == 0:
-                self.storage_handler.save_error(error_msg)
             raise  # Re-raise to ensure proper exit code
-        except Exception as e:
-            logger.error(f"Training error: {str(e)}")
+        except Exception:
             error_msg = f"Error during training. \n{traceback.format_exc()}"
-            if self.rank == 0:
-                self.storage_handler.save_error(error_msg)
             raise  # Re-raise to ensure proper exit code
-
-    def _gather_metrics(self, metrics: dict[str, float]) -> dict[str, float]:
-        """Gather and average metrics from all processes.
-
-        Args:
-            metrics: Local metrics from this process
-
-        Returns:
-            Averaged metrics across all processes
-        """
-        if self.world_size <= 1:
-            return metrics
-
-        averaged_metrics = {}
-        for key, value in metrics.items():
-            tensor = torch.tensor([value], device=self.device)
-            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-            averaged_metrics[key] = (tensor / self.world_size).item()
-
-        return averaged_metrics
+        finally:
+            if err_msg:
+                logger.error(error_msg)
+                if self.rank == 0:
+                    self.storage_handler.update_training_metadata(
+                        epoch=epoch, step=self.global_train_step, error=err_msg
+                    )
+            # Close the logger
+            if self.rank == 0:
+                self.training_logger.close()
 
     def get_model_without_ddp(self) -> nn.Module:
         """Get the model without DDP wrapper.
@@ -351,6 +320,8 @@ class DistributedTrainer:
             "metrics": metrics,
             "best_val_loss": self.best_val_loss,
             "algorithm_config": self.algorithm_config,
+            "global_train_step": self.global_train_step,
+            "global_val_step": self.global_val_step,
         }
 
         # Save regular checkpoint
@@ -359,6 +330,7 @@ class DistributedTrainer:
         # Save best model if needed
         if is_best:
             self.storage_handler.save_checkpoint(checkpoint, "checkpoint_best.pt")
+
         logger.info("... checkpoint saved!")
 
     def load_checkpoint(self, path: str) -> dict:
@@ -380,10 +352,124 @@ class DistributedTrainer:
             optimizer.load_state_dict(opt_state)
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
 
+        # Restore step counters
+        self.global_train_step = checkpoint.get("global_train_step", 0)
+        self.global_val_step = checkpoint.get("global_val_step", 0)
+
         if "algorithm_config" in checkpoint:
             self.algorithm_config = checkpoint["algorithm_config"]
 
         return checkpoint
+
+    def _log_gradients(self, step: int) -> None:
+        """Log gradient histograms for model parameters.
+
+        Args:
+            step: Training step.
+        """
+        model = self.get_model_without_ddp()
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                self.training_logger.log_histogram(
+                    f"gradients/{name}", param.grad, step
+                )
+
+    def _log_weights(self, step: int) -> None:
+        """Log weight histograms for model parameters.
+
+        Args:
+            step: Training step.
+        """
+        model = self.get_model_without_ddp()
+        for name, param in model.named_parameters():
+            self.training_logger.log_histogram(f"weights/{name}", param, step)
+
+    def _log_scalars(
+        self, scalars: dict[str, float], step: int, prefix: str = "train/"
+    ) -> None:
+        """Log batch outputs to TensorBoard.
+
+        Args:
+            scalars: Dictionary of scalar values to log
+            step: Training step
+            prefix: Prefix for the log names (e.g., "train/step" or "val/batch")
+        """
+        if self.rank != 0:
+            return
+        for scalar_name, scalar_value in scalars.items():
+            scalar_value = (
+                scalar_value.item()
+                if isinstance(scalar_value, torch.Tensor)
+                else scalar_value
+            )
+            self.training_logger.log_scalar(
+                f"{prefix}/{scalar_name}", scalar_value, step
+            )
+
+    def _accumulate_epoch_metrics(
+        self,
+        batch_output: BatchedTrainingOutputs,
+        epoch_losses: list[dict[str, float]],
+        epoch_metrics: list[dict[str, float]],
+    ) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
+        """Accumulate metrics for the current epoch.
+
+        Args:
+            batch_output: Outputs from the training step
+            epoch_losses: List of losses accumulated for the epoch
+            epoch_metrics: List of metrics accumulated for the epoch
+
+        Returns:
+            Updated lists of losses and metrics for the epoch
+        """
+        # Accumulate losses
+        if batch_output.losses:
+            epoch_losses.append({
+                k: v.item() if isinstance(v, torch.Tensor) else v
+                for k, v in batch_output.losses.items()
+            })
+
+        # Accumulate metrics
+        if batch_output.metrics:
+            epoch_metrics.append({
+                k: v.item() if isinstance(v, torch.Tensor) else v
+                for k, v in batch_output.metrics.items()
+            })
+
+        return epoch_losses, epoch_metrics
+
+    def _average_epoch_metrics(
+        self,
+        epoch_losses: list[dict[str, float]],
+        epoch_metrics: list[dict[str, float]],
+        epoch: int,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Average metrics across the epoch.
+
+        Args:
+            epoch_losses: List of losses accumulated for the epoch
+            epoch_metrics: List of metrics accumulated for the epoch
+            epoch: Current epoch number
+
+        Returns:
+            A dictionary of averaged losses and metrics for the epoch
+        """
+        avg_epoch_losses = {}
+        avg_epoch_metrics = {}
+
+        if epoch_losses:
+            for key in epoch_losses[0].keys():
+                avg_epoch_losses[key] = sum(x[key] for x in epoch_losses) / len(
+                    epoch_losses
+                )
+
+        if epoch_metrics:
+            for key in epoch_metrics[0].keys():
+                avg_epoch_metrics[key] = sum(x[key] for x in epoch_metrics) / len(
+                    epoch_metrics
+                )
+
+        return avg_epoch_losses, avg_epoch_metrics
 
 
 def setup_distributed(rank: int, world_size: int) -> None:

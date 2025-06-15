@@ -1,9 +1,12 @@
+"""Training script for Neuracore models using PyTorch and distributed training."""
+
 import argparse
 import gc
 import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.multiprocessing as mp
@@ -16,6 +19,7 @@ from neuracore.ml import NeuracoreModel
 from neuracore.ml.datasets.pytorch_synchronized_dataset import (
     PytorchSynchronizedDataset,
 )
+from neuracore.ml.logging.tensorboard_training_logger import TensorboardTrainingLogger
 from neuracore.ml.trainers.batch_autotuner import find_optimal_batch_size
 from neuracore.ml.trainers.distributed_trainer import (
     DistributedTrainer,
@@ -23,17 +27,13 @@ from neuracore.ml.trainers.distributed_trainer import (
     setup_distributed,
 )
 from neuracore.ml.utils.algorithm_loader import AlgorithmLoader
-from neuracore.ml.utils.metrics import GCPMetricsLogger, LocalMetricsLogger
-from neuracore.ml.utils.storage_handler import (
-    GCPStorageHandler,
-    LocalStorageHandler,
-    StorageHandler,
-)
+from neuracore.ml.utils.algorithm_storage_handler import AlgorithmStorageHandler
+from neuracore.ml.utils.training_storage_handler import TrainingStorageHandler
 
 os.environ["PJRT_DEVICE"] = "GPU"
 
 
-def create_parser():
+def create_parser() -> argparse.ArgumentParser:
     """Create argument parser with subparsers for local and GCP training."""
     parser = argparse.ArgumentParser(description="Robot Training Script")
 
@@ -45,24 +45,6 @@ def create_parser():
     parent_parser.add_argument(
         "--resume", type=str, help="Path to checkpoint to resume from"
     )
-    # parent_parser.add_argument(
-    #     "--bucket",
-    #     type=str,
-    #     required=True,
-    #     help="GCS bucket name for loading data (and storing outputs in GCP mode)",
-    # )
-    # parent_parser.add_argument(
-    #     "--org_id", type=str, required=True, help="Organization ID"
-    # )
-    # parent_parser.add_argument(
-    #     "--synced_data_id", type=str, required=True, help="Synced Data ID"
-    # )
-    # parent_parser.add_argument(
-    #     "--database_name",
-    #     type=str,
-    #     required=True,
-    #     help="Firestore database name",
-    # )
     parent_parser.add_argument(
         "--batch_size",
         type=str,
@@ -103,15 +85,18 @@ def create_parser():
         ],
         help="List of input data types to use (joint_positions, joint_torques, etc.)",
     )
-
-    # Create subparsers for local and GCP training
-    # subparsers = parser.add_subparsers(dest="mode", help="Training mode")
-    # subparsers.required = True
-
-    # # Local training subparser
-    # local_parser = subparsers.add_parser(
-    #     "local", parents=[parent_parser], help="Run training locally"
-    # )
+    parent_parser.add_argument(
+        "--dataset_name",
+        type=str,
+        required=True,
+        help="Name of the dataset to train on",
+    )
+    parent_parser.add_argument(
+        "--frequency",
+        type=int,
+        default=10,
+        help="Frequency of data collection in Hz",
+    )
     parent_parser.add_argument(
         "--local_output_dir",
         type=str,
@@ -121,20 +106,16 @@ def create_parser():
     parent_parser.add_argument(
         "--algorithm_path",
         type=str,
-        required=True,
+        required=False,
+        default=None,
         help="Algorithm to use for training",
     )
-
-    # # GCP training subparser
-    # gcp_parser = subparsers.add_parser(
-    #     "gcp", parents=[parent_parser], help="Run as if on gcp"
-    # )
-    # gcp_parser.add_argument(
-    #     "--training_id", type=str, required=True, help="Training ID"
-    # )
-    # gcp_parser.add_argument(
-    #     "--algorithm_id", type=str, required=True, help="Algorithm ID"
-    # )
+    parent_parser.add_argument(
+        "--training_id", type=str, required=False, default=None, help="Training ID"
+    )
+    parent_parser.add_argument(
+        "--algorithm_id", type=str, required=False, default=None, help="Algorithm ID"
+    )
     parent_parser.add_argument(
         "--algorithm_config",
         type=str,
@@ -145,16 +126,17 @@ def create_parser():
     return parser
 
 
-def setup_logging(output_dir: Path, rank: int = 0):
+def setup_logging(output_dir: str, rank: int = 0) -> None:
     """Setup logging configuration."""
-    # Only set up file logging for rank 0
     if rank == 0:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(output_dir / "train.log"),
+                logging.FileHandler(output_path / "train.log"),
             ],
         )
     else:
@@ -167,47 +149,28 @@ def setup_logging(output_dir: Path, rank: int = 0):
 
 
 def get_model_class(
-    args, storage_handler: StorageHandler, logger
+    args: argparse.Namespace, logger: logging.Logger
 ) -> type[NeuracoreModel]:
     """Get model class from algorithm string."""
-    # Create model
-    if args.mode == "local":
+    if args.algorithm_path is not None:
         algo_path = Path(args.algorithm_path)
         logger.info(f"Loading algorithm from {algo_path}")
         algorithm_loader = AlgorithmLoader(algo_path)
         model_class = algorithm_loader.load_model()
-    else:  # GCP mode
-        # Load algorithm from storage using algorithm_id
-        try:
-            algorithm_dir = f"organizations/shared/algorithms/{args.algorithm_id}"
-            ext_algorithm_dir = storage_handler.download_algorithm(algorithm_dir)
-        except FileNotFoundError:
-            logger.info("Algorithm not found in shared. Looking at private.")
-            algorithm_dir = (
-                f"organizations/{args.org_id}/algorithms/{args.algorithm_id}"
-            )
-            ext_algorithm_dir = storage_handler.download_algorithm(algorithm_dir)
-        logger.info(f"Algorithm extracted to {ext_algorithm_dir}")
-        logger.info("Loading algorithm model class")
-        algorithm_loader = AlgorithmLoader(ext_algorithm_dir)
+    else:
+        if args.algorithm_id is None:
+            raise ValueError("Algorithm ID must be provided for GCP training.")
+        storage_handler = AlgorithmStorageHandler(algorithm_id=args.algorithm_id)
+        extract_dir = Path(args.local_output_dir) / "algorithm"
+        storage_handler.download_algorithm(extract_dir=extract_dir)
+        logger.info(f"Algorithm extracted to {extract_dir}")
+        algorithm_loader = AlgorithmLoader(extract_dir)
         model_class = algorithm_loader.load_model()
     return model_class
 
 
-def create_storage_handler(args):
-    if args.mode == "local":
-        storage_handler = LocalStorageHandler(local_dir=args.local_output_dir)
-    else:  # GCP mode
-        storage_handler = GCPStorageHandler(
-            bucket_name=args.bucket,
-            database_name=args.database_name,
-            org_id=args.org_id,
-            training_id=args.training_id,
-        )
-    return storage_handler
-
-
-def extract_data_types(args) -> tuple[list[str], list[str]]:
+def extract_data_types(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    """Extract input and output data types from command line arguments."""
     input_data_types = args.input_data_types
     if len(input_data_types) == 1:
         input_data_types = input_data_types[0].split(" ")
@@ -220,44 +183,39 @@ def extract_data_types(args) -> tuple[list[str], list[str]]:
 
 
 def run_training(
-    rank,
-    world_size,
-    args,
-    algorithm_config,
+    rank: int,
+    world_size: int,
+    args: argparse.Namespace,
+    algorithm_config: dict[str, Any],
     batch_size: int,
     synchronized_dataset: SynchronizedDataset,
-):
+) -> None:
     """Run the training process for a single GPU."""
     # Setup for distributed training
     if world_size > 1:
         setup_distributed(rank, world_size)
 
-    # Setup output directory
-    output_dir = Path(args.local_output_dir if args.mode == "local" else "output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     # Setup logging (different file per process)
-    setup_logging(output_dir, rank)
+    setup_logging(args.local_output_dir, rank)
     logger = logging.getLogger(__name__)
 
     # Set random seed (different for each process to ensure different data sampling)
     torch.manual_seed(args.seed + rank)
-
     epochs = args.epochs
 
     try:
-
         logger.info(f"Using batch size: {batch_size}")
+        training_storage_handler = TrainingStorageHandler(
+            local_dir=args.local_output_dir,
+            training_job_id=args.training_id,
+        )
 
-        # Initialize storage handler based on mode
-        storage_handler = create_storage_handler(args)
-
-        input_data_types, output_data_types = extract_data_types(args)
-        input_data_types = [DataType(t) for t in input_data_types]
-        output_data_types = [DataType(t) for t in output_data_types]
+        input_data_types_str, output_data_types_str = extract_data_types(args)
+        input_data_types = [DataType(t) for t in input_data_types_str]
+        output_data_types = [DataType(t) for t in output_data_types_str]
 
         # Create model
-        model_class = get_model_class(args, storage_handler, logger)
+        model_class = get_model_class(args, logger)
         logger.info(f"Loaded model class: {model_class}")
 
         # Setup dataset
@@ -281,7 +239,7 @@ def run_training(
             dataset, [train_size, val_size], generator=generator
         )
 
-        num_workers = min(os.cpu_count() // 2, 4)
+        num_workers = min((os.cpu_count() or 1) // 2, 4)
 
         # Create samplers and data loaders
         if world_size > 1:
@@ -363,24 +321,14 @@ def run_training(
             f"{sum(p.numel() for p in model.parameters()):,} parameters"
         )
 
-        # Setup metrics logger based on mode
-        if args.mode == "local":
-            metrics_logger = LocalMetricsLogger(local_dir=args.local_output_dir)
-        else:  # GCP mode
-            metrics_logger = GCPMetricsLogger(
-                database_name=args.database_name,
-                org_id=args.org_id,
-                training_id=args.training_id,
-            )
-
-        # Create trainer
+        training_logger = TensorboardTrainingLogger()
         trainer = DistributedTrainer(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            metrics_logger=metrics_logger,
-            storage_handler=storage_handler,
-            output_dir=output_dir,
+            training_logger=training_logger,
+            storage_handler=training_storage_handler,
+            output_dir=args.local_output_dir,
             algorithm_config=algorithm_config,
             num_epochs=epochs,
             rank=rank,
@@ -417,19 +365,28 @@ def run_training(
 
 
 def determine_optimal_batch_size(
-    args,
+    args: argparse.Namespace,
     algorithm_config: dict,
-    storage_handler: StorageHandler,
+    storage_handler: TrainingStorageHandler,
     synchronized_dataset: SynchronizedDataset,
-):
-    """Run batch size autotuning on a single GPU and return the result."""
+) -> int:
+    """Run batch size autotuning on a single GPU and return the result.
 
+    Args:
+        args: Parsed command line arguments.
+        algorithm_config: Algorithm configuration dictionary.
+        storage_handler: Storage handler for saving results.
+        synchronized_dataset: Synchronized dataset to use for autotuning.
+
+    Returns:
+        int: Optimal batch size determined by autotuning.
+    """
     logger = logging.getLogger(__name__)
     logger.info("Starting batch size autotuning on GPU 0...")
 
-    input_data_types, output_data_types = extract_data_types(args)
-    input_data_types = [DataType(t) for t in input_data_types]
-    output_data_types = [DataType(t) for t in output_data_types]
+    input_data_types_str, output_data_types_str = extract_data_types(args)
+    input_data_types = [DataType(t) for t in input_data_types_str]
+    output_data_types = [DataType(t) for t in output_data_types_str]
 
     # Setup dataset for autotuning
     dataset = PytorchSynchronizedDataset(
@@ -443,7 +400,7 @@ def determine_optimal_batch_size(
     train_size = len(dataset)
     train_dataset = torch.utils.data.Subset(dataset, list(range(train_size)))
 
-    model_class = get_model_class(args, storage_handler, logger)
+    model_class = get_model_class(args, logger)
 
     model_init_description = ModelInitDescription(
         dataset_description=dataset.dataset_description,
@@ -485,8 +442,8 @@ def determine_optimal_batch_size(
     return optimal_batch_size
 
 
-def main():
-    # Parse arguments
+def main() -> None:
+    """Main function to run the training script."""
     parser = create_parser()
     args = parser.parse_args()
 
@@ -498,21 +455,15 @@ def main():
     )
 
     data_types_to_sync = args.input_data_types + args.output_data_types
-    dataset_name_to_train_on = args.dataset_name
-    frequency = args.frequency
 
     nc.login()
-    dataset = nc.get_dataset(dataset_name_to_train_on)
+    dataset = nc.get_dataset(args.dataset_name)
     synchronized_dataset = dataset.synchronize(
-        frequency=frequency, data_types=data_types_to_sync
+        frequency=args.frequency, data_types=data_types_to_sync
     )
 
-    # Create output directory
-    output_dir = Path(args.local_output_dir if args.mode == "local" else "output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     # Setup logging for main process
-    setup_logging(output_dir)
+    setup_logging(args.local_output_dir)
 
     # Check if distributed training is enabled and multiple GPUs are available
     world_size = torch.cuda.device_count()
@@ -522,9 +473,12 @@ def main():
         batch_size = batch_size.lower()
     if batch_size == "auto":
         # Run autotuning before launching distributed training
-        storage_handler = create_storage_handler(args)
+        storage_handler = TrainingStorageHandler(
+            local_dir=args.local_output_dir,
+            training_job_id=args.training_id,
+        )
         optimal_batch_size = determine_optimal_batch_size(
-            args, dict(algorithm_config), storage_handler
+            args, dict(algorithm_config), storage_handler, synchronized_dataset
         )
         # Update algorithm_config with the determined batch size
         batch_size = optimal_batch_size
