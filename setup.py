@@ -63,6 +63,8 @@ setup(
             "transformers",
             "diffusers>=0.27.2",
             "einops",
+            "hydra-core>=1.3.0",
+            "tensorboard>=2",
         ],
         "dev": [
             "pytest>=6.2.5",

@@ -114,3 +114,4 @@ logs/
 examples/logs/
 *.log
 *.log.gz
+neuracore_training_output/

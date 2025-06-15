@@ -29,8 +29,8 @@ from ...core.nc_types import (
     ModelInitDescription,
     SyncPoint,
 )
+from ..core.ml_types import BatchedTrainingOutputs, BatchedTrainingSamples, MaskableData
 from ..datasets.pytorch_dummy_dataset import PytorchDummyDataset
-from ..ml_types import BatchedTrainingOutputs, BatchedTrainingSamples, MaskableData
 from .algorithm_loader import AlgorithmLoader
 from .mar import create_mar
 

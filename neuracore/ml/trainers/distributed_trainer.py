@@ -4,7 +4,7 @@ import logging
 import os
 import traceback
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -35,7 +35,6 @@ class DistributedTrainer:
         training_logger: TrainingLogger,
         storage_handler: TrainingStorageHandler,
         output_dir: Path,
-        algorithm_config: dict[str, Any],
         num_epochs: int,
         save_freq: int = 1,
         save_checkpoints: bool = True,
@@ -52,7 +51,6 @@ class DistributedTrainer:
             training_logger: Logger for training metrics (TensorBoard, etc.)
             storage_handler: Handler for model storage
             output_dir: Directory for output files
-            algorithm_config: Configuration for the algorithm
             num_epochs: Number of epochs to train
             save_freq: Frequency to save checkpoints (in epochs)
             save_checkpoints: Whether to save checkpoints
@@ -77,7 +75,6 @@ class DistributedTrainer:
         self.training_logger = training_logger
         self.storage_handler = storage_handler
         self.output_dir = output_dir
-        self.algorithm_config = algorithm_config
         self.num_epochs = num_epochs
         self.save_freq = save_freq
         self.save_checkpoints = save_checkpoints
@@ -113,7 +110,7 @@ class DistributedTrainer:
             max_ram_utilization=0.8, max_gpu_utilization=0.95
         )
 
-        self.training_logger.log_model_graph(self.get_model_without_ddp())
+        # self.training_logger.log_model_graph(self.get_model_without_ddp())
 
         # Progress bar only on rank 0
         pbar = tqdm(
@@ -319,7 +316,6 @@ class DistributedTrainer:
             "optimizer_states": [opt.state_dict() for opt in self.optimizers],
             "metrics": metrics,
             "best_val_loss": self.best_val_loss,
-            "algorithm_config": self.algorithm_config,
             "global_train_step": self.global_train_step,
             "global_val_step": self.global_val_step,
         }
@@ -355,9 +351,6 @@ class DistributedTrainer:
         # Restore step counters
         self.global_train_step = checkpoint.get("global_train_step", 0)
         self.global_val_step = checkpoint.get("global_val_step", 0)
-
-        if "algorithm_config" in checkpoint:
-            self.algorithm_config = checkpoint["algorithm_config"]
 
         return checkpoint
 

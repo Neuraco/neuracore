@@ -52,13 +52,13 @@ class PytorchDummyDataset(PytorchNeuracoreDataset):
                 Should return (input_ids, attention_mask) tuple.
         """
         super().__init__(
+            num_recordings=num_episodes,
             input_data_types=input_data_types,
             output_data_types=output_data_types,
             output_prediction_horizon=output_prediction_horizon,
             tokenize_text=tokenize_text,
         )
         self.num_samples = num_samples
-        self.num_episodes = num_episodes
 
         self.image_size = (224, 224)
 

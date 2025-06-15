@@ -7,7 +7,6 @@ with automatic syncing to GCS buckets.
 
 import json
 import logging
-import tempfile
 import threading
 import time
 from enum import Enum
@@ -42,7 +41,7 @@ class TensorboardTrainingLogger(TrainingLogger):
 
     def __init__(
         self,
-        log_dir: Optional[str] = None,
+        log_dir: Path,
         experiment_name: Optional[str] = None,
         run_name: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
@@ -74,15 +73,7 @@ class TensorboardTrainingLogger(TrainingLogger):
         self.experiment_name = experiment_name or "default_experiment"
         self.run_name = run_name or f"run_{int(time.time())}"
         self.config = config or {}
-
-        # Set up log directory
-        if log_dir is None:
-            if mode == LoggingMode.LOCAL:
-                log_dir = f"./tensorboard_logs/{self.experiment_name}/{self.run_name}"
-            else:
-                log_dir = tempfile.mkdtemp(prefix=f"tensorboard_{self.run_name}_")
-
-        self.log_dir = Path(log_dir)
+        self.log_dir = log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize TensorBoard writer

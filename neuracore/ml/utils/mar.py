@@ -13,7 +13,7 @@ import torch
 from model_archiver.model_archiver import ModelArchiver
 from model_archiver.model_archiver_config import ModelArchiverConfig
 
-from neuracore.ml.neuracore_model import NeuracoreModel
+from neuracore.ml.core.neuracore_model import NeuracoreModel
 from neuracore.ml.utils.algorithm_loader import AlgorithmLoader
 
 

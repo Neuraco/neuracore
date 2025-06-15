@@ -60,6 +60,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             output_data_types=output_data_types,
             output_prediction_horizon=output_prediction_horizon,
             tokenize_text=tokenize_text,
+            num_recordings=len(synchronized_dataset),
         )
         self.synchronized_dataset = synchronized_dataset
         self.dataset_description = self.synchronized_dataset.dataset_description
@@ -78,6 +79,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             max_ram_utilization=0.8, max_gpu_utilization=1.0, gpu_id=None
         )
         self._mem_check_counter = 0
+        self._num_samples = self.synchronized_dataset.num_transitions
 
     @staticmethod
     def _get_timestep(episode_length: int) -> int:
@@ -277,6 +279,9 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             return sample
 
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             logger.error(
                 f"Error loading frame {timestep} from episode {episode_idx}: {str(e)}"
             )
@@ -368,3 +373,7 @@ class PytorchSynchronizedDataset(PytorchNeuracoreDataset):
             [maskable_data.mask for maskable_data in maskable_data_for_each_t]
         )
         return MaskableData(stacked_maskable_data, stacked_maskable_mask)
+
+    def __len__(self) -> int:
+        """Return the number of episodes in the dataset."""
+        return self._num_samples
