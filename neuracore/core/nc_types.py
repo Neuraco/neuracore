@@ -138,6 +138,13 @@ class SyncedData(BaseModel):
     end_time: float
 
 
+class PreviewSyncData(SyncedData):
+    """Sync data with additional urls for synced preview videos."""
+
+    synced_rgb_urls: dict[str, str]
+    synced_depth_urls: dict[str, str]
+
+
 class DataType(str, Enum):
     """Enumeration of supported data types in the Neuracore system.
 
