@@ -146,8 +146,7 @@ class JsonDataStream(DataStream):
 class VideoDataStream(DataStream):
     """Stream that encodes and uploads video data.
 
-    Base class for video streams that provides dual encoding (lossless and lossy)
-    for optimal storage and streaming performance.
+    Base class for video streams that provides lossless encoding and uploading.
     """
 
     def __init__(self, camera_id: str, width: int = 640, height: int = 480):
@@ -176,7 +175,7 @@ class VideoDataStream(DataStream):
         """Stop video recording and finalize encoding.
 
         Returns:
-            List[threading.Thread]: Upload threads for both lossless and lossy encoders
+            List[threading.Thread]: Upload threads
         """
         super().stop_recording()
         if self._lossless_encoder is None:
@@ -201,15 +200,15 @@ class VideoDataStream(DataStream):
 class DepthDataStream(VideoDataStream):
     """Stream that encodes and uploads depth data as video.
 
-    Converts depth data to RGB representation for video encoding while
-    maintaining both lossless and lossy variants for different use cases.
+    Converts depth data to RGB representation for video encoding.
+
     """
 
     def start_recording(self, recording_id: str) -> None:
         """Start depth video recording.
 
-        Initializes both lossless (for accuracy) and lossy (for bandwidth)
-        encoders with appropriate codec settings for depth data.
+        Initializes a lossless encoder with appropriate codec settings for
+        depth data.
 
         Args:
             recording_id: Unique identifier for the recording session
@@ -228,14 +227,13 @@ class DepthDataStream(VideoDataStream):
 class RGBDataStream(VideoDataStream):
     """Stream that encodes and uploads RGB video data.
 
-    Handles RGB camera data with dual encoding for both archival quality
-    (lossless) and streaming efficiency (lossy) use cases.
+    Handles RGB camera data with lossless encoding.
     """
 
     def start_recording(self, recording_id: str) -> None:
         """Start RGB video recording.
 
-        Initializes both lossless and lossy encoders with appropriate
+        Initializes the lossless encoder with appropriate
         settings for RGB video data.
 
         Args:
