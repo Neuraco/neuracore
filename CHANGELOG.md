@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- None
+- Lossy upload stream. This is now handled during synchronization lowering performance requirements.
 
 ### Fixed
 
