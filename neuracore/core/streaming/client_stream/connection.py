@@ -49,7 +49,9 @@ class PierToPierConnection:
     on_close: Callable
     client_session: ClientSession
     loop: asyncio.AbstractEventLoop
-    has_received_answer: bool = False
+    received_answer_event: asyncio.Event = asyncio.Event()
+    transmitting_lock: asyncio.Lock = asyncio.Lock()
+    pending_ice_tasks: asyncio.Queue[asyncio.Task] = asyncio.Queue()
     has_sent_offer: bool = False
     auth: Auth = field(default_factory=get_auth)
     event_sources: set[JSONSource] = field(default_factory=set)
@@ -225,35 +227,25 @@ class PierToPierConnection:
         Args:
             ice_message: JSON string containing ICE candidate information
         """
-        if self._closed:
-            return
-        ice_content = json.loads(ice_message)
-        candidate = candidate_from_sdp(ice_content["candidate"])
-        candidate.sdpMid = ice_content["sdpMid"]
-        candidate.sdpMLineIndex = ice_content["sdpMLineIndex"]
-        await self.connection.addIceCandidate(candidate)
 
-    async def on_offer(self, offer: str) -> None:
-        """Handle received SDP offer from remote peer.
+        async def _add_ice_after_answer() -> None:
 
-        Processes the offer, creates an answer, and sends it back through
-        the signaling server. Includes media ID ordering fixes.
+            if self._closed:
+                return
 
-        Args:
-            offer: SDP offer string from the remote peer
-        """
-        if self._closed:
-            print("offer to closed connection")
-            return
+            ice_content = json.loads(ice_message)
+            candidate = candidate_from_sdp(ice_content["candidate"])
+            candidate.sdpMid = ice_content["sdpMid"]
+            candidate.sdpMLineIndex = ice_content["sdpMLineIndex"]
+            await self.connection.addIceCandidate(candidate)
 
-        offer = RTCSessionDescription(offer, type="offer")
-        self.fix_mid_ordering("before offer")
-        await self.connection.setRemoteDescription(offer)
-        self.fix_mid_ordering("after offer")
-        answer = await self.connection.createAnswer()
-        self.fix_mid_ordering("after answer")
-        await self.connection.setLocalDescription(answer)
-        await self.send_handshake_message(MessageType.SDP_ANSWER, answer.sdp)
+        if self.received_answer_event.is_set():
+            await _add_ice_after_answer()
+        else:
+            # Avoid blocking the connection, skip the wait
+            await self.pending_ice_tasks.put(
+                asyncio.create_task(_add_ice_after_answer())
+            )
 
     async def on_answer(self, answer_sdp: str) -> None:
         """Handle received SDP answer from remote peer.
@@ -264,26 +256,31 @@ class PierToPierConnection:
         Args:
             answer_sdp: SDP answer string from the remote peer
         """
-        if self.has_received_answer:
-            return
-        self.has_received_answer = True
-
         if self._closed:
             print("answer to closed connection")
             return
 
-        if self.connection.signalingState != "have-local-offer":
-            print("Not Ready for answer")
-            return
+        async with self.transmitting_lock:
+            if self.received_answer_event.is_set():
+                return
 
-        answer = RTCSessionDescription(answer_sdp, type="answer")
+            if self.connection.signalingState != "have-local-offer":
+                print("Not Ready for answer")
+                return
 
-        self.fix_mid_ordering("before answer")
-        try:
-            await self.connection.setRemoteDescription(answer)
-            await self.force_ice_negotiation()
-        except Exception:
-            self.has_received_answer = False
+            answer = RTCSessionDescription(answer_sdp, type="answer")
+
+            self.fix_mid_ordering("before answer")
+            try:
+                await self.connection.setRemoteDescription(answer)
+                await self.force_ice_negotiation()
+                self.received_answer_event.set()
+                while not self.pending_ice_tasks.empty():
+                    task = await self.pending_ice_tasks.get()
+                    await task
+
+            except Exception:
+                print("Error setting remote description")
 
     async def send_offer(self) -> None:
         """Send SDP offer to remote peer.
@@ -294,24 +291,30 @@ class PierToPierConnection:
         if self._closed:
             print("Cannot send offer from closed connection")
             return
-        if self.has_sent_offer:
-            return
-        self.has_sent_offer = True
 
-        if self.connection.signalingState != "stable":
-            print("Not ready to send offer")
-            return
+        async with self.transmitting_lock:
+            if self.has_sent_offer:
+                return
+            self.has_sent_offer = True
+            if self.connection.signalingState != "stable":
+                print("Not ready to send offer")
+                return
 
-        self.fix_mid_ordering("before offer")
-        try:
-            await self.connection.setLocalDescription(
-                await self.connection.createOffer()
-            )
-            await self.send_handshake_message(
-                MessageType.SDP_OFFER, self.connection.localDescription.sdp
-            )
-        except Exception:
-            self.has_sent_offer = False
+            self.fix_mid_ordering("before offer")
+            try:
+                await self.connection.setLocalDescription(
+                    await self.connection.createOffer()
+                )
+                await self.send_handshake_message(
+                    MessageType.SDP_OFFER, self.connection.localDescription.sdp
+                )
+
+                await asyncio.wait_for(self.received_answer_event.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                # waiting 30 seconds for answer -> assuming peer is gone
+                await self.close()
+            except Exception:
+                self.has_sent_offer = False
 
     async def close(self) -> None:
         """Close the peer-to-peer connection gracefully.
@@ -326,4 +329,7 @@ class PierToPierConnection:
                 source.remove_listener(
                     source.STATE_UPDATED_EVENT, self.data_channel_callback[source.mid]
                 )
+            while not self.pending_ice_tasks.empty():
+                task = await self.pending_ice_tasks.get()
+                task.cancel()
             self.on_close()
