@@ -6,10 +6,7 @@ and deployment readiness checks. It ensures algorithms are compatible with
 the Neuracore training and inference infrastructure.
 """
 
-import base64
-import io
 import logging
-import os
 import tempfile
 import time
 import traceback
@@ -17,11 +14,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 from pydantic import BaseModel
 from torch.utils.data import DataLoader
 
 import neuracore as nc
+from neuracore.core.utils.image_string_encoder import ImageStringEncoder
 
 from ...core.nc_types import (
     CameraData,
@@ -76,24 +73,6 @@ def setup_logging(output_dir: Path) -> None:
             logging.FileHandler(output_dir / "validate.log"),
         ],
     )
-
-
-def _encode_image(image: np.ndarray) -> str:
-    """Encode a numpy image array to base64 string for testing.
-
-    Converts image data to the base64 format expected by the Neuracore
-    inference pipeline for validation testing.
-
-    Args:
-        image: Numpy array representing an image to encode.
-
-    Returns:
-        Base64-encoded string representation of the image.
-    """
-    pil_image = Image.fromarray(image.astype("uint8"))
-    buffer = io.BytesIO()
-    pil_image.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 def _create_joint_data(maskable_data: MaskableData) -> JointData:
@@ -251,9 +230,7 @@ def run_validation(
         ValueError: If the algorithm directory contains no Python files or
             if critical validation steps fail.
     """
-    os.environ["NEURACORE_LIVE_DATA_ENABLED"] = (
-        "False"  # Disable live data for validation
-    )
+    nc.stop_live_data()
 
     # find the first folder that contains Python files
     python_files = list(algorithm_dir.rglob("*.py"))
@@ -446,7 +423,8 @@ def run_validation(
                         ).astype(np.uint8)
                         rgbs = {
                             f"camera{i}": CameraData(
-                                timestamp=time.time(), frame=_encode_image(v)
+                                timestamp=time.time(),
+                                frame=ImageStringEncoder.encode_image(v),
                             )
                             for i, v in enumerate(rgbs)
                         }
@@ -475,7 +453,8 @@ def run_validation(
 
                         depth_cameras = {
                             f"depth_camera{i}": CameraData(
-                                timestamp=time.time(), frame=_encode_image(v)
+                                timestamp=time.time(),
+                                frame=ImageStringEncoder.encode_image(v),
                             )
                             for i, v in enumerate(depths_normalized)
                         }

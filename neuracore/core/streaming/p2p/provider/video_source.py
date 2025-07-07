@@ -23,7 +23,10 @@ import av
 import numpy as np
 from aiortc import MediaStreamTrack
 
-from .stream_enabled import EnabledManager
+from neuracore.core.streaming.p2p.provider.json_source import JSONSource
+from neuracore.core.utils.image_string_encoder import ImageStringEncoder
+
+from ..enabled_manager import EnabledManager
 
 av.logging.set_level(None)
 
@@ -52,6 +55,7 @@ class VideoSource:
     _last_frame: np.ndarray = field(
         default_factory=lambda: np.zeros((480, 640, 3), dtype=np.uint8)
     )
+    custom_data_source: Optional[JSONSource] = None
 
     def add_frame(self, frame_data: np.ndarray) -> None:
         """Add a new video frame to the source.
@@ -61,6 +65,10 @@ class VideoSource:
                 Should be in HWC format (Height, Width, Channels).
         """
         self._last_frame = frame_data
+        if self.custom_data_source:
+            self.custom_data_source.publish(
+                {"frame": ImageStringEncoder.encode_image(frame_data, cap_size=True)}
+            )
 
     def get_last_frame(self) -> av.VideoFrame:
         """Get the most recent video frame.
@@ -85,6 +93,18 @@ class VideoSource:
         consumer = VideoTrack(self)
         self.stream_enabled.add_listener(EnabledManager.DISABLED, consumer.stop)
         return consumer
+
+    def get_neuracore_custom_track(self) -> JSONSource:
+        """Gets a data source for the video frames encoded as dataUri's.
+
+        Returns:
+            JSONSource: the source for the video frames.
+        """
+        if not self.custom_data_source:
+            self.custom_data_source = JSONSource(
+                mid=self.mid, stream_enabled=self.stream_enabled
+            )
+        return self.custom_data_source
 
 
 @dataclass

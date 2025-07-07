@@ -6,33 +6,37 @@ model prediction requests, data synchronization from robot sensors, and
 manages TorchServe instances for local model deployment.
 """
 
-import base64
 import json
 import logging
-import os
 import subprocess
 import sys
 import tempfile
 import time
-from io import BytesIO
 from pathlib import Path
 from subprocess import Popen
 from typing import Optional
 
 import numpy as np
 import requests
-from PIL import Image
 from tqdm import tqdm
 
 from neuracore.api.core import _get_robot
 from neuracore.core.config.get_current_org import get_current_org
 from neuracore.core.robot import Robot
 from neuracore.core.utils.depth_utils import depth_to_rgb
+from neuracore.core.utils.image_string_encoder import ImageStringEncoder
 
 from .auth import get_auth
 from .const import API_URL
 from .exceptions import EndpointError
-from .nc_types import CameraData, DataType, JointData, ModelPrediction, SyncPoint
+from .nc_types import (
+    CameraData,
+    DataType,
+    JointData,
+    LanguageData,
+    ModelPrediction,
+    SyncPoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,7 @@ class EndpointPolicy:
 
     def __init__(
         self,
-        robot: Optional[Robot],
+        robot: Robot,
         predict_url: str,
         headers: Optional[dict[str, str]] = None,
     ):
@@ -65,45 +69,9 @@ class EndpointPolicy:
         self._is_local = "localhost" in predict_url
         self.robot = robot
 
-    def _encode_image(self, image: np.ndarray) -> str:
-        """Encode numpy image array to base64 string for transmission.
-
-        Converts numpy arrays to PNG format and encodes as base64. For remote
-        endpoints, automatically resizes large images to 224x224 to meet
-        payload size limits.
-
-        Args:
-            image: Numpy array representing an RGB image.
-
-        Returns:
-            Base64 encoded string of the PNG image.
-        """
-        pil_image = Image.fromarray(image)
-        if not self._is_local:
-            if pil_image.size > (224, 224):
-                # There is a limit on the image size for non-local endpoints
-                # This is OK as almost all algorithms scale to 224x224
-                pil_image = pil_image.resize((224, 224))
-        buffer = BytesIO()
-        pil_image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-    def _decode_image(self, encoded_image: str) -> np.ndarray:
-        """Decode base64 image string back to numpy array.
-
-        Args:
-            encoded_image: Base64 encoded image string.
-
-        Returns:
-            Numpy array representing the decoded image.
-        """
-        img_bytes = base64.b64decode(encoded_image)
-        buffer = BytesIO(img_bytes)
-        pil_image = Image.open(buffer)
-        return np.array(pil_image)
-
-    def _maybe_add_exisiting_data(
-        self, existing: Optional[JointData], to_add: JointData
+    @staticmethod
+    def _maybe_add_existing_data(
+        existing: Optional[JointData], to_add: JointData
     ) -> JointData:
         """Merge joint data from multiple streams into a single data structure.
 
@@ -126,12 +94,17 @@ class EndpointPolicy:
             existing.additional_values.update(to_add.additional_values)
         return existing
 
-    def _create_sync_point(self) -> SyncPoint:
+    @classmethod
+    def get_latest_data(cls, robot: Robot, include_remote: bool = True) -> SyncPoint:
         """Create a synchronized data point from current robot sensor streams.
 
         Collects the latest data from all active robot streams including
         cameras, joint sensors, and language inputs. Organizes the data
         into a synchronized structure with consistent timestamps.
+
+        Args:
+            include_remote: wether to connect to remote nodes to gather their
+                data.
 
         Returns:
             SyncPoint containing all current sensor data.
@@ -139,42 +112,50 @@ class EndpointPolicy:
         Raises:
             NotImplementedError: If an unsupported stream type is encountered.
         """
-        if self.robot is None:
-            raise AttributeError("No robot instance")
         sync_point = SyncPoint(timestamp=time.time())
-        for stream_name, stream in self.robot.list_all_streams().items():
+        for stream_name, stream in robot.list_all_streams().items():
             if "rgb" in stream_name:
                 stream_data = stream.get_latest_data()
+                assert isinstance(stream_data, np.ndarray)
                 if sync_point.rgb_images is None:
                     sync_point.rgb_images = {}
                 sync_point.rgb_images[stream_name] = CameraData(
-                    timestamp=time.time(), frame=self._encode_image(stream_data)
+                    timestamp=time.time(), frame=stream_data
                 )
             elif "depth" in stream_name:
                 stream_data = stream.get_latest_data()
+                assert isinstance(stream_data, np.ndarray)
                 if sync_point.depth_images is None:
                     sync_point.depth_images = {}
                 sync_point.depth_images[stream_name] = CameraData(
                     timestamp=time.time(),
-                    frame=self._encode_image(depth_to_rgb(stream_data)),
+                    frame=depth_to_rgb(stream_data),
                 )
             elif "joint_positions" in stream_name:
                 stream_data = stream.get_latest_data()
-                sync_point.joint_positions = self._maybe_add_exisiting_data(
+                assert isinstance(stream_data, JointData)
+                sync_point.joint_positions = cls._maybe_add_existing_data(
                     sync_point.joint_positions, stream_data
                 )
             elif "joint_velocities" in stream_name:
                 stream_data = stream.get_latest_data()
-                sync_point.joint_velocities = self._maybe_add_exisiting_data(
+                assert isinstance(stream_data, JointData)
+                sync_point.joint_velocities = cls._maybe_add_existing_data(
                     sync_point.joint_velocities, stream_data
                 )
             elif "language" in stream_name:
                 stream_data = stream.get_latest_data()
+                assert isinstance(stream_data, LanguageData)
                 sync_point.language_data = stream_data
             else:
                 raise NotImplementedError(
                     f"Support for stream {stream_name} is not implemented yet"
                 )
+
+        if not include_remote:
+            return sync_point
+
+        # get_consumer_stream_manager(robot_id=robot.id, instance=robot.instance)
         return sync_point
 
     def predict(self, sync_point: Optional[SyncPoint] = None) -> ModelPrediction:
@@ -196,19 +177,25 @@ class EndpointPolicy:
             ValueError: If payload size exceeds limits for remote endpoints.
         """
         if sync_point is None:
-            sync_point = self._create_sync_point()
+            sync_point = self.get_latest_data(self.robot, include_remote=True)
         else:
             if sync_point.rgb_images:
                 for key in sync_point.rgb_images:
                     if isinstance(sync_point.rgb_images[key].frame, np.ndarray):
-                        sync_point.rgb_images[key].frame = self._encode_image(
-                            sync_point.rgb_images[key].frame
+                        sync_point.rgb_images[key].frame = (
+                            ImageStringEncoder.encode_image(
+                                sync_point.rgb_images[key].frame,
+                                cap_size=self._is_local,
+                            )
                         )
             if sync_point.depth_images:
                 for key in sync_point.depth_images:
                     if isinstance(sync_point.depth_images[key].frame, np.ndarray):
-                        sync_point.depth_images[key].frame = self._encode_image(
-                            sync_point.depth_images[key].frame
+                        sync_point.depth_images[key].frame = (
+                            ImageStringEncoder.encode_image(
+                                sync_point.depth_images[key].frame,
+                                cap_size=self._is_local,
+                            )
                         )
         request_data = sync_point.model_dump()
         if not self._is_local:
@@ -250,8 +237,10 @@ class EndpointPolicy:
                 for b_idx in range(len(rgb_batch)):
                     for t_idx in range(len(rgb_batch[b_idx])):
                         for cam_idx in range(len(rgb_batch[b_idx][t_idx])):
-                            rgb_batch[b_idx][t_idx][cam_idx] = self._decode_image(
-                                rgb_batch[b_idx][t_idx][cam_idx]
+                            rgb_batch[b_idx][t_idx][cam_idx] = (
+                                ImageStringEncoder.decode_image(
+                                    rgb_batch[b_idx][t_idx][cam_idx]
+                                )
                             )
                 model_pred.outputs[DataType.RGB_IMAGE] = np.array(rgb_batch)
             for key, value in model_pred.outputs.items():
@@ -371,9 +360,7 @@ def connect_local_endpoint(
         raise ValueError("Must provide either path_to_model or train_run_name")
     if path_to_model and train_run_name:
         raise ValueError("Cannot provide both path_to_model and train_run_name")
-    robot = None
-    if os.getenv("NEURACORE_LIVE_DATA_ENABLED", "True").lower() == "true":
-        robot = _get_robot(robot_name, instance)
+    robot = _get_robot(robot_name, instance)
 
     if train_run_name:
         auth = get_auth()

@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from neuracore.core.config.get_current_org import get_current_org
+from neuracore.core.nc_types import RobotInstanceIdentifier
 from neuracore.core.streaming.data_stream import DataStream
 from neuracore.core.streaming.recording_state_manager import (
     RecordingStateManager,
@@ -440,7 +441,7 @@ class Robot:
 
 
 # Global robot registry
-_robots: dict[tuple[str, int], Robot] = {}
+_robots: dict[RobotInstanceIdentifier, Robot] = {}
 _robot_name_id_mapping: dict[str, str] = {}
 
 
@@ -475,7 +476,7 @@ def init(
     if not robot.id:
         raise RobotError("Robot not initialized. Call init() first.")
     _robot_name_id_mapping[robot_name] = robot.id
-    _robots[(robot.id, instance)] = robot
+    _robots[RobotInstanceIdentifier(robot_id=robot.id, robot_instance=instance)] = robot
     return robot
 
 
@@ -493,7 +494,7 @@ def get_robot(robot_name: str, instance: int) -> Robot:
         RobotError: If the robot is not found in the registry.
     """
     robot_id = _robot_name_id_mapping.get(robot_name, robot_name)
-    key = (robot_id, instance)
+    key = RobotInstanceIdentifier(robot_id=robot_id, robot_instance=instance)
     if key not in _robots:
         raise RobotError(
             f"Robot {robot_name}:{instance} not initialized. Call init() first."

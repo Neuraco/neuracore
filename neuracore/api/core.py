@@ -12,9 +12,10 @@ from typing import Optional
 
 from neuracore.core.config.config_manager import get_config_manager
 from neuracore.core.organizations import list_my_orgs
-from neuracore.core.streaming.client_stream.client_stream_manager import (
-    get_robot_streaming_manager,
+from neuracore.core.streaming.p2p.provider.global_live_data_enabled import (
+    global_live_data_enabled_manager,
 )
+from neuracore.core.streaming.p2p.stream_manager_factory import get_p2p_manager_factory
 from neuracore.core.streaming.recording_state_manager import get_recording_state_manager
 from neuracore.core.utils import backend_utils
 
@@ -163,7 +164,7 @@ def connect_robot(
     # Initialize push update managers
     if robot.id is None:
         raise RobotError("Robot not initialized. Call init() first.")
-    get_robot_streaming_manager(robot.id, robot.instance)
+    get_p2p_manager_factory().get_provider_manager(robot.id, robot.instance)
     get_recording_state_manager()
     return robot
 
@@ -233,14 +234,15 @@ def stop_live_data(robot_name: Optional[str] = None, instance: int = 0) -> None:
     This does not affect data recording, only the live streaming capability.
 
     Args:
-        robot_name: Robot identifier. If not provided, uses the currently
-            active robot from the global state.
+        robot_name: Robot identifier. If not provided disables streaming for all robots
         instance: Instance number of the robot for multi-instance scenarios.
 
-    Raises:
-        RobotError: If no robot is active and no robot_name is provided.
     """
+    if not robot_name:
+        global_live_data_enabled_manager.disable()
+        return
+
     robot = _get_robot(robot_name, instance)
     if not robot.id:
         raise RobotError("Robot not initialized. Call init() first.")
-    get_robot_streaming_manager(robot.id, robot.instance).close()
+    get_p2p_manager_factory().remove_manager(robot.id, robot.instance)

@@ -8,6 +8,8 @@ execution, and response formatting for robot control applications.
 import subprocess
 import sys
 
+from neuracore.core.utils.image_string_encoder import ImageStringEncoder
+
 # Ensure neuracore is installed when running on cloud
 # ruff: noqa: E402
 subprocess.check_call([
@@ -18,8 +20,6 @@ subprocess.check_call([
     "neuracore",
 ])
 
-import base64
-import io
 import json
 import logging
 import os
@@ -139,34 +139,6 @@ class RobotModelHandler(BaseHandler):
         self.initialized = True
         logger.info("Model initialized!")
 
-    def _decode_image(self, encoded_image: str) -> np.ndarray:
-        """Decode base64-encoded image string to numpy array.
-
-        Args:
-            encoded_image: Base64-encoded image string from client requests.
-
-        Returns:
-            Numpy array representing the decoded image in RGB format.
-        """
-        img_bytes = base64.b64decode(encoded_image)
-        buffer = io.BytesIO(img_bytes)
-        pil_image = Image.open(buffer)
-        return np.array(pil_image)
-
-    def _encode_image(self, image: np.ndarray) -> str:
-        """Encode numpy image array to base64 string for response.
-
-        Args:
-            image: Numpy array representing an image to encode.
-
-        Returns:
-            Base64-encoded string representation of the image.
-        """
-        pil_image = Image.fromarray(image.astype("uint8"))
-        buffer = io.BytesIO()
-        pil_image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
     def _process_joint_data(
         self, joint_data: list[JointData], max_len: int
     ) -> MaskableData:
@@ -214,7 +186,7 @@ class RobotModelHandler(BaseHandler):
             first_image_data = list(image_data[0].values())[0]
             if isinstance(first_image_data.frame, str):
                 # Decode to check channels
-                sample_image = self._decode_image(first_image_data.frame)
+                sample_image = ImageStringEncoder.decode_image(first_image_data.frame)
                 is_depth = len(sample_image.shape) == 2 or sample_image.shape[2] == 1
 
         channels = 1 if is_depth else 3
@@ -226,7 +198,7 @@ class RobotModelHandler(BaseHandler):
                 assert isinstance(
                     camera_data.frame, str
                 ), f"Expected string frame data, got {type(camera_data.frame)}"
-                image = self._decode_image(camera_data.frame)
+                image = ImageStringEncoder.decode_image(camera_data.frame)
 
                 # Handle different image formats
                 if is_depth:
@@ -550,7 +522,9 @@ class RobotModelHandler(BaseHandler):
                             image = np.transpose(image, (1, 2, 0))
                         if image.dtype != np.uint8:
                             image = np.clip(image, 0, 255).astype(np.uint8)
-                        str_rets[b_idx][t_idx].append(self._encode_image(image))
+                        str_rets[b_idx][t_idx].append(
+                            ImageStringEncoder.encode_image(image)
+                        )
             inference_output.outputs[DataType.RGB_IMAGE] = str_rets
 
         # Handle depth image outputs
@@ -572,7 +546,9 @@ class RobotModelHandler(BaseHandler):
                             * 255
                         )
                         depth_norm = depth_norm.astype(np.uint8)
-                        str_rets[b_idx][t_idx].append(self._encode_image(depth_norm))
+                        str_rets[b_idx][t_idx].append(
+                            ImageStringEncoder.encode_image(depth_norm)
+                        )
             inference_output.outputs[DataType.DEPTH_IMAGE] = str_rets
 
         # Handle joint predictions

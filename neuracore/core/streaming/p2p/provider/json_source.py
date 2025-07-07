@@ -14,7 +14,7 @@ from typing import Optional
 
 from pyee.asyncio import AsyncIOEventEmitter
 
-from neuracore.core.streaming.client_stream.stream_enabled import EnabledManager
+from neuracore.core.streaming.p2p.enabled_manager import EnabledManager
 
 MAXIMUM_EVENT_FREQUENCY_HZ = 10
 MINIMUM_EVENT_DELTA = 1 / MAXIMUM_EVENT_FREQUENCY_HZ

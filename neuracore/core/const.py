@@ -11,9 +11,11 @@ LIVE_DATA_ENABLED = os.getenv("NEURACORE_LIVE_DATA_ENABLED", "True").lower() == 
 
 API_URL = os.getenv("NEURACORE_API_URL", "https://api.neuracore.app/api")
 MAX_DATA_STREAMS = 50
-
-
 MAX_INPUT_ATTEMPTS = 3
+
+STREAMING_MINIMUM_BACKOFF_TIME_S = 0.05
+STREAMING_MAXIMUM_BACKOFF_TIME_S = 5
+
 CONFIRMATION_INPUT = {
     "yes",
     "y",

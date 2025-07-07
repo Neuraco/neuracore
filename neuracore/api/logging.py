@@ -15,12 +15,7 @@ import numpy as np
 
 from neuracore.api.core import _get_robot
 from neuracore.core.exceptions import RobotError
-from neuracore.core.robot import Robot
-from neuracore.core.streaming.client_stream.client_stream_manager import (
-    get_robot_streaming_manager,
-)
-
-from ..core.nc_types import (
+from neuracore.core.nc_types import (
     CameraData,
     CustomData,
     EndEffectorData,
@@ -29,14 +24,16 @@ from ..core.nc_types import (
     PointCloudData,
     PoseData,
 )
-from ..core.streaming.data_stream import (
+from neuracore.core.robot import Robot
+from neuracore.core.streaming.data_stream import (
     DataStream,
     DepthDataStream,
     JsonDataStream,
     RGBDataStream,
     VideoDataStream,
 )
-from ..core.utils.depth_utils import MAX_DEPTH
+from neuracore.core.streaming.p2p.stream_manager_factory import get_p2p_manager_factory
+from neuracore.core.utils.depth_utils import MAX_DEPTH
 
 
 def _create_group_id_from_dict(joint_names: Dict[str, Any]) -> str:
@@ -131,9 +128,11 @@ def _log_joint_data(
     joint_stream.log(data=data)
     if robot.id is None:
         raise RobotError("Robot not initialized. Call init() first.")
-    get_robot_streaming_manager(robot.id, robot.instance).get_json_source(
-        data_type, "joints", sensor_key=joint_str_id
-    ).publish(data.model_dump(mode="json"))
+    get_p2p_manager_factory().get_provider_manager(
+        robot.id, robot.instance
+    ).get_json_source(data_type, "joints", sensor_key=joint_str_id).publish(
+        data.model_dump(mode="json")
+    )
 
 
 def _validate_extrinsics_intrinsics(
@@ -221,9 +220,11 @@ def _log_camera_data(
     )
     if robot.id is None:
         raise RobotError("Robot not initialized. Call init() first.")
-    get_robot_streaming_manager(robot.id, robot.instance).get_video_source(
-        camera_id, camera_type, f"{camera_id}_{camera_type}"
-    ).add_frame(image)
+    get_p2p_manager_factory().get_provider_manager(
+        robot.id, robot.instance
+    ).get_video_source(camera_id, camera_type, f"{camera_id}_{camera_type}").add_frame(
+        image
+    )
 
 
 def log_synced_data(
