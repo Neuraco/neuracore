@@ -17,9 +17,17 @@ def main():
         overwrite=False,
     )
     # If you have a train run name, you can use it to connect to a local. E.g.:
-    policy = nc.connect_local_endpoint(train_run_name=TRAINING_JOB_NAME)
+    policy = nc.launch_policy_direct(train_run_name=TRAINING_JOB_NAME)
+
     # If you know the path to the local model.mar file, you can use it directly as:
-    # policy = nc.connect_local_endpoint(path_to_model="PATH/TO/MODEL.mar")
+    # policy = nc.launch_policy_direct(model_file=PATH/TO/MODEL.mar)
+
+    # Alternatively, you can connect to a local endpoint that has been started
+    # policy = nc.launch_policy_local_server(train_run_name=TRAINING_JOB_NAME)
+
+    # Optional. Set the checkpoint to the last epoch.
+    # Note by default, model is loaded from the last epoch.
+    policy.set_checkpoint(epoch=-1)
 
     onscreen_render = True
     render_cam_name = "angle"
