@@ -10,14 +10,15 @@ from typing import Optional
 
 import requests
 
+from neuracore.api.core import _get_robot
+from neuracore.core.auth import get_auth
 from neuracore.core.config.get_current_org import get_current_org
-
-from ..core.auth import get_auth
-from ..core.const import API_URL
-from ..core.endpoint import DirectPolicy, LocalServerPolicy, RemoteServerPolicy
-from ..core.endpoint import policy as _policy
-from ..core.endpoint import policy_local_server as _policy_local_server
-from ..core.endpoint import policy_remote_server as _policy_remote_server
+from neuracore.core.const import API_URL
+from neuracore.core.endpoint import DirectPolicy, LocalServerPolicy, RemoteServerPolicy
+from neuracore.core.endpoint import policy as _policy
+from neuracore.core.endpoint import policy_local_server as _policy_local_server
+from neuracore.core.endpoint import policy_remote_server as _policy_remote_server
+from neuracore.core.stream_data_gatherer import StreamDataGatherer
 
 
 def policy(
@@ -210,3 +211,28 @@ def delete_endpoint(endpoint_id: str) -> None:
         response.raise_for_status()
     except Exception as e:
         raise ValueError(f"Error deleting endpoint: {e}")
+
+
+def get_data_gatherer(
+    robot_name: Optional[str] = None, instance: int = 0, include_remote: bool = True
+) -> StreamDataGatherer:
+    """Creates a object for gathering data logged by a robot.
+
+    Note after instantiation it can take time before data is available from
+    all remote nodes as it sets up all the necessary connections.
+
+    Args:
+        robot_name: Optional robot ID. If not provided, uses the last initialized robot
+        instance: Optional instance number of the robot
+        include_remote: wether to connect to remote nodes to gather their
+            data. This is ignored if NEURACORE_CONSUME_LIVE_DATA is disabled.
+
+    Returns:
+        The StreamDataGatherer object for this robot.
+
+    Raises:
+        RobotError: If the robot is not initialized.
+    """
+    return StreamDataGatherer(
+        robot=_get_robot(robot_name, instance), include_remote=include_remote
+    )
