@@ -64,6 +64,17 @@ def remote_node_logger(robot_name: str, instance: int, ready_event: Event):
         # Don't set the event, so the main test will time out and fail.
 
 
+EXPECTED_REMOTE_DATATYPES = (
+    nc.DataType.JOINT_POSITIONS,
+    nc.DataType.RGB_IMAGE,
+    nc.DataType.CUSTOM,
+    nc.DataType.END_EFFECTORS,
+    nc.DataType.JOINT_TARGET_POSITIONS,
+    nc.DataType.JOINT_VELOCITIES,
+    nc.DataType.JOINT_TORQUES,
+)
+
+
 def test_get_latest_data_from_multiple_nodes():
     """
     Tests that get_latest_data correctly aggregates data logged from multiple
@@ -99,7 +110,10 @@ def test_get_latest_data_from_multiple_nodes():
     try:
         start_connection_time = time.time()
         while not nc.check_remote_nodes_connected(
-            num_remote_nodes=1, robot_name=robot_name, instance=instance
+            num_remote_nodes=1,
+            data_types=EXPECTED_REMOTE_DATATYPES,
+            robot_name=robot_name,
+            instance=instance,
         ):
             if time.time() - start_connection_time > MAXIMUM_WAITING_TIME_S:
                 assert False, "Timed out waiting for remote nodes to fully connect."
@@ -110,7 +124,10 @@ def test_get_latest_data_from_multiple_nodes():
         )
 
         assert nc.check_remote_nodes_connected(
-            num_remote_nodes=1, robot_name=robot_name, instance=instance
+            num_remote_nodes=1,
+            ata_types=EXPECTED_REMOTE_DATATYPES,
+            robot_name=robot_name,
+            instance=instance,
         ), "Remote nodes should remain connected after fetching data."
 
         # 5. Assertions:
