@@ -6,6 +6,7 @@ All logging functions support optional robot identification and timestamping.
 """
 
 import base64
+import gzip
 import hashlib
 import json
 import time
@@ -761,6 +762,8 @@ def log_point_cloud(
         RobotError: If no robot is active and no robot_name provided
         ValueError: If point cloud format is invalid
     """
+    total_start = time.time()
+    validate_start = time.time()
     timestamp = timestamp or time.time()
     if not isinstance(points, np.ndarray):
         raise ValueError("Point cloud must be a numpy array")
@@ -770,6 +773,7 @@ def log_point_cloud(
         raise ValueError("Point cloud must have 3 columns")
     if points.shape[0] > 307200:
         raise ValueError("Point cloud must have at most 307200 points")
+
     if rgb_points is not None:
         if not isinstance(rgb_points, np.ndarray):
             raise ValueError("RGB point cloud must be a numpy array")
@@ -781,9 +785,27 @@ def log_point_cloud(
             )
         if rgb_points.shape[1] != 3:
             raise ValueError("RGB point cloud must have 3 columns")
-        rgb_points = rgb_points.tolist()
 
+        rgb_tolist_start = time.time()
+        rgb_points = rgb_points.tolist()
+        rgb_tolist_end = time.time()
+        print(
+            f"[PROFILE] rgb_points.tolist(): "
+            f"{(rgb_tolist_end - rgb_tolist_start)*1000:.2f} ms"
+        )
+    validate_end = time.time()
+    print(
+        f"[PROFILE] validate points: " f"{(validate_end - validate_start)*1000:.2f} ms"
+    )
+
+    extrin_start = time.time()
     extrinsics, intrinsics = _validate_extrinsics_intrinsics(extrinsics, intrinsics)
+    extrin_end = time.time()
+    print(
+        f"[PROFILE] validate extrinsics: " f"{(extrin_end - extrin_start)*1000:.2f} ms"
+    )
+
+    stream_setup_start = time.time()
     robot = _get_robot(robot_name, instance)
     str_id = f"point_cloud_{camera_id}"
     stream = robot.get_data_stream(str_id)
@@ -794,22 +816,76 @@ def log_point_cloud(
         stream, JsonDataStream
     ), "Expected stream to be instance of JSONDataStream"
     start_stream(robot, stream)
+    stream_setup_end = time.time()
+    print(
+        f"[PROFILE] stream setup: "
+        f"{(stream_setup_end - stream_setup_start)*1000:.2f} ms"
+    )
 
+    pts_tolist_start = time.time()
+    points_list = points.tolist()
+    pts_tolist_end = time.time()
+    print(
+        f"[PROFILE] points.tolist(): "
+        f"{(pts_tolist_end - pts_tolist_start)*1000:.2f} ms"
+    )
+
+    encode_start = time.time()
     point_data = PointCloudData(
         timestamp=timestamp,
-        points=points.tolist(),
+        points=points_list,
         rgb_points=rgb_points,
         extrinsics=extrinsics,
         intrinsics=intrinsics,
     )
+    encode_end = time.time()
+    print(
+        f"[PROFILE] PointCloudData creation (incl. encode): "
+        f"{(encode_end - encode_start)*1000:.2f} ms"
+    )
 
+    raw_bytes = np.array(points_list, dtype=np.float32).tobytes()
+    gzip_bytes = gzip.compress(raw_bytes, compresslevel=3)
+    b64_bytes = base64.b64encode(gzip_bytes)
+    print(
+        f"[PROFILE] Sizes: raw={len(raw_bytes)/1024:.1f} KB, "
+        f"gzip={len(gzip_bytes)/1024:.1f} KB, "
+        f"b64={len(b64_bytes)/1024:.1f} KB"
+    )
+
+    stream_log_start = time.time()
     stream.log(point_data)
+    stream_log_end = time.time()
+    print(
+        f"[PROFILE] stream.log(): " f"{(stream_log_end - stream_log_start)*1000:.2f} ms"
+    )
 
     if robot.id is None:
         raise RobotError("Robot not initialized. Call init() first.")
 
-    StreamManagerOrchestrator().get_provider_manager(
-        robot.id, robot.instance
-    ).get_json_source(camera_id, TrackKind.POINT_CLOUD, sensor_key=str_id).publish(
-        point_data.model_dump(mode="json")
+    publish_start = time.time()
+    json_data = point_data.model_dump(mode="json")
+    send_start = time.time()
+    src = (
+        StreamManagerOrchestrator()
+        .get_provider_manager(robot.id, robot.instance)
+        .get_json_source(camera_id, TrackKind.POINT_CLOUD, sensor_key=str_id)
+    )
+    send_end = time.time()
+    print(f"[PROFILE] publish() setup time: " f"{(send_end - send_start)*1000:.2f} ms")
+
+    ack_start = time.time()
+    src.publish(json_data)
+    ack_end = time.time()
+    print(f"[PROFILE] network send+ack: " f"{(ack_end - ack_start)*1000:.2f} ms")
+
+    publish_end = time.time()
+    print(
+        f"[PROFILE] publish() (total): " f"{(publish_end - publish_start)*1000:.2f} ms"
+    )
+
+    total_end = time.time()
+    print(
+        f"[PROFILE] TOTAL log_point_cloud(): "
+        f"{(total_end - total_start)*1000:.2f} ms"
     )

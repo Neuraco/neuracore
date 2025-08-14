@@ -57,6 +57,19 @@ def main(args):
         nc.log_language("Pick up the cube and pass it to the other robot", timestamp=t)
         nc.log_rgb(CAM_NAME, obs.cameras[CAM_NAME].rgb, timestamp=t)
 
+        pcd = obs.cameras[CAM_NAME].point_cloud
+        pts = pcd[:, :3].astype(np.float32, copy=False)
+        cols = (pcd[:, 3:] * 255).clip(0, 255).astype(np.uint8, copy=False)
+
+        nc.log_point_cloud(
+            camera_id=CAM_NAME,
+            points=pts,
+            rgb_points=cols,
+            extrinsics=env.get_camera_extrinsics(CAM_NAME),
+            intrinsics=env.get_camera_intrinsics(CAM_NAME),
+            timestamp=t,
+        )
+
         # Execute action trajectory while logging
         for action in action_traj:
             obs, reward, done = env.step(np.array(list(action.values())))
@@ -70,6 +83,19 @@ def main(args):
             )
             nc.log_joint_target_positions(action, timestamp=t)
             nc.log_rgb(CAM_NAME, obs.cameras[CAM_NAME].rgb, timestamp=t)
+
+            pcd = obs.cameras[CAM_NAME].point_cloud
+            pts = pcd[:, :3].astype(np.float32, copy=False)
+            cols = (pcd[:, 3:] * 255).clip(0, 255).astype(np.uint8, copy=False)
+
+            nc.log_point_cloud(
+                camera_id=CAM_NAME,
+                points=pts,
+                rgb_points=cols,
+                extrinsics=env.get_camera_extrinsics(CAM_NAME),
+                intrinsics=env.get_camera_intrinsics(CAM_NAME),
+                timestamp=t,
+            )
 
         # Stop recording if enabled
         if record:
